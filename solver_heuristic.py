@@ -27,9 +27,7 @@ def solve_heuristic(eternity_puzzle:EternityPuzzle):
     # take the orientation that works the best
     for i in range(eternity_puzzle.n_piece):
 
-        print(i)
         piece = choose_piece(i//eternity_puzzle.board_size,i%eternity_puzzle.board_size,solution,remaining_piece,eternity_puzzle)
-        print(piece)
 
         best_n_conflicts = 2**32
         new_piece = None
@@ -67,8 +65,7 @@ def choose_piece(i,j,solution,pieces,puzzle:EternityPuzzle):
 
     if i == 0 or j == 0 or i == board_size -1 or j == board_size -1:
         with_gray = [p for p in pieces if GRAY in p]
-        print(len(with_gray))
-        return with_gray[np.random.randint(0,len(with_gray))]
+        return with_gray[0]
 
     else:
         pieces = [p for p in pieces if GRAY not in p]
