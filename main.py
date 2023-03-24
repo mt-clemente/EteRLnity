@@ -15,6 +15,7 @@ def parse_arguments():
     parser.add_argument('--infile', type=str, default='input')
     parser.add_argument('--outfile', type=str, default='solution.txt')
     parser.add_argument('--visufile', type=str, default='visualization.png')
+    parser.add_argument('--hotstart', type=str, default=False)
 
     return parser.parse_args()
 
@@ -48,7 +49,7 @@ if __name__ == '__main__':
         solution, n_conflict = solver_local_search.solve_local_search(e)
     elif args.agent == "advanced":
         # Your nice agent (Phase 3 - main part of the project)
-        solution, n_conflict = solver_advanced.solve_advanced(e)
+        solution, n_conflict = solver_advanced.solve_advanced(e,args.hotstart)
     else:
         raise Exception("This agent does not exist")
     solving_time = round((time.time() - start_time) / 60,2)

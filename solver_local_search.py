@@ -11,7 +11,6 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
         cost is the cost of the solution
     """
     init_sol, ann_cost= solve_heuristic(eternity_puzzle)
-    print(init_sol)
     best_cost = eternity_puzzle.get_total_n_conflict(init_sol)
     board_size = eternity_puzzle.board_size
     init_sol = np.array(init_sol).reshape((board_size,board_size,4))
@@ -61,7 +60,6 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
                                 n[i,j], n[ip,jp] = n[ip,jp].copy(), n[i,j].copy()
                                 neighbors.append(n)
 
-        print(0)
         new_sol = neighbors[np.random.randint(len(neighbors))]
 
         tabu = [t for t in tabu if t[1] > step]
@@ -84,9 +82,6 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
             if  cost < best_cost:
                 best_sol = new_sol
                 best_cost = cost
-                print("YAY")
-                print(best_cost)
-                eternity_puzzle.display_solution(arr_to_list(best_sol),f"{step}")
 
             beta_adjust = min(BETA, beta_adjust + BETA_VAR)
         
@@ -96,7 +91,6 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
         
         t *= ALPHA
 
-    print(best_sol)
     return arr_to_list(best_sol), best_cost
 
 
