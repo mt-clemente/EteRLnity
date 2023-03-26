@@ -43,7 +43,7 @@ def solve_best_random(eternity_puzzle, n_trial):
 
     best_solution = None
 
-    for i in range(n_trial):
+    for i in range(10):
 
         cur_sol, cur_n_conflict = solve_random(eternity_puzzle)
 

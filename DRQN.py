@@ -3,20 +3,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from segment_tree import MinSegmentTree, SumSegmentTree
-import numpy as np
 
+from pytorch_memlab import profile
 
 
 
 # Memory buffer with PER
 class PrioritizedReplayMemory():
 
-    def __init__(self, size,Transition,alpha, batch_size):
+    def __init__(self, size,Transition,alpha, batch_size,max_bsize,n_colors):
 
         self.Transition = Transition
-        self.state_buf = np.empty((size,9,9),dtype=np.float64)
-        self.next_state_buf = np.empty(size, dtype=torch.Tensor)
-        self.rews_buf = np.zeros(size, dtype=np.float32)
+        self.state_buf = torch.empty((size,max_bsize+2,max_bsize+2,n_colors*4),dtype=torch.float64)
+        self.next_state_buf = torch.empty((size,max_bsize+2,max_bsize+2,n_colors*4))
+        self.rews_buf = torch.zeros(size, dtype=torch.float32)
         self.max_size = size
         self.batch_size =  batch_size
         self.ptr = 0
@@ -24,6 +24,8 @@ class PrioritizedReplayMemory():
         self.max_priority = 1
         self.tree_ptr = 0
         self.alpha = alpha
+
+        print(self.state_buf.device)
 
         tree_capacity = 1
         while tree_capacity < size:
@@ -61,7 +63,7 @@ class PrioritizedReplayMemory():
         state = self.state_buf[indices]
         next_state = self.next_state_buf[indices]
         rews = self.rews_buf[indices]
-        weights = np.array([self._calculate_weight(i, beta) for i in indices])
+        weights = torch.tensor([self._calculate_weight(i, beta) for i in indices])
         
         return self.Transition(
             state,
@@ -74,7 +76,7 @@ class PrioritizedReplayMemory():
         
     def update_priorities(self, indices, priorities):
         """Update priorities of sampled transitions."""
-        assert len(indices) == len(priorities)
+        # assert len(indices) == len(priorities)
 
         for idx, priority in zip(indices, priorities):
             assert priority > 0
@@ -120,54 +122,72 @@ class PrioritizedReplayMemory():
         return self.size
         
         
-# Neural Network used in our modek
+# Neural Network used in our model
 class DQN(nn.Module):
 
-    def __init__(self, h, w, outputs,device):
+    def __init__(self, h, w, outputs, device, n_colors):
+
+        k1 = 3
+        k2 = 3
+        k3 = 2
+
         super(DQN, self).__init__()
         self.device = device
-        self.conv1 = nn.Conv2d(1, 9 * 9, kernel_size=5)
-        self.bn1 = nn.BatchNorm2d(9 * 9)
-        self.conv2 = nn.Conv2d(9 * 9, 64, kernel_size=3, stride=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 32, kernel_size=2, stride=1)
-        self.bn3 = nn.BatchNorm2d(32)
+        self.conv3d1 = nn.Conv3d(
+            in_channels=1,
+            out_channels=16,
+            kernel_size= (k1,k1, 4 * n_colors),
+            # dtype=torch.half,
+            device=self.device,
+            )
+        
+        self.bn1 = nn.BatchNorm2d(16, device=self.device)
+        self.conv2d1 = nn.Conv2d(
+            16,
+            16,
+            kernel_size=k2,
+            stride=1,
+            # dtype=torch.half,
+            device=self.device
+            )
+        
+        self.bn2 = nn.BatchNorm2d(16, device=self.device)
 
-        # Number of Linear input connections depends on output of conv2d layers
+        self.conv2d2 = nn.Conv2d(
+            16,
+            8,
+            kernel_size=k3,
+            stride=1,
+            # dtype=torch.half,
+            device=self.device
+            )
+        self.bn3 = nn.BatchNorm2d(8, device=self.device)
+
         # and therefore the input image size, so compute it.
         def conv2d_size_out(size, kernel_size=3, stride=1):
             return (size - (kernel_size - 1) - 1) // stride + 1
-        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w,5),3),2)
-        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h,5),3),2)
-        linear_input_size = convw * convh * 32
-        self.head = nn.Linear(linear_input_size, outputs)
+        
+        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w,k1),k2),k3)
+        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h,k1),k2),k3)
 
+        linear_input_size = convw * convh * 8
+        self.linear = nn.Linear(
+            linear_input_size,
+            outputs,
+            device=self.device,
+            # dtype=torch.half
+            )
 
-    def forward(self, x):
+        # self.half()
+
+    def forward(self, x:torch.Tensor):
+        x = x.float()
+        print(x.dtype,type(self.conv3d1))
         x = x.to(self.device)
-        x = F.elu(self.bn1(self.conv1(x)))
-        x = F.elu(self.bn2(self.conv2(x)))
-        x = F.elu(self.bn3(self.conv3(x)))
-        return self.head(x.view(x.size(0), -1))
+        x = self.conv3d1(x).squeeze(-1)
+        x = F.relu(self.bn1(x))
+        x = F.relu(self.bn2(self.conv2d1(x)))
+        x = F.relu(self.bn3(self.conv2d2(x)))
+        return self.linear(x.view(x.size(0), -1))
 
 
-class BestMove():
-    def __init__(self) -> None:
-        self.move = None
-
-    def update(self, act) -> None:
-        self.move = act
-
-
-class MoveBuffer():
-    def __init__(self) -> None:
-        self.statem = None
-        self.reward = None
-
-    def update(self, statem: torch.Tensor, reward):
-        self.statem = statem
-        self.reward = reward
-    
-    def reset(self):
-        self.statem = None
-        self.reward = None
