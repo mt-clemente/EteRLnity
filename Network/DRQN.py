@@ -139,37 +139,42 @@ class DQN(nn.Module):
         k2 = 3
         k3 = 2
 
+        conv2d1_size = 16
+        conv2d2_size = 16
+        lin_size_fact = 8
+
         super(DQN, self).__init__()
         self.device = device
         self.conv3d1 = nn.Conv3d(
             in_channels=1,
-            out_channels=16,
+            out_channels=conv2d1_size,
             kernel_size= (k1,k1, 4 * encoding_size),
             dtype=UNIT,
             device=self.device,
             )
         
-        self.bn1 = nn.BatchNorm2d(16, device=self.device)
+        self.bn1 = nn.BatchNorm2d(conv2d1_size, device=self.device)
         self.conv2d1 = nn.Conv2d(
-            16,
-            16,
+            conv2d1_size,
+            conv2d2_size,
             kernel_size=k2,
             stride=1,
             dtype=UNIT,
             device=self.device
             )
         
-        self.bn2 = nn.BatchNorm2d(16, device=self.device)
+        self.bn2 = nn.BatchNorm2d(conv2d2_size, device=self.device)
 
         self.conv2d2 = nn.Conv2d(
-            16,
-            8,
+            conv2d2_size,
+            lin_size_fact,
             kernel_size=k3,
             stride=1,
             dtype=UNIT,
             device=self.device
             )
-        self.bn3 = nn.BatchNorm2d(8, device=self.device)
+
+        self.bn3 = nn.BatchNorm2d(lin_size_fact, device=self.device)
 
         # and therefore the input image size, so compute it.
         def conv2d_size_out(size, kernel_size=3, stride=1):
@@ -178,7 +183,7 @@ class DQN(nn.Module):
         convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w,k1),k2),k3)
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h,k1),k2),k3)
 
-        linear_input_size = convw * convh * 8
+        linear_input_size = convw * convh * lin_size_fact
         self.linear = nn.Linear(
             linear_input_size,
             outputs,
@@ -186,7 +191,6 @@ class DQN(nn.Module):
             dtype=UNIT
             )
 
-        # self.half()
 
     def forward(self, x:torch.Tensor):
         x = x.to(self.device)

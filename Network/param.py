@@ -28,7 +28,7 @@ N_COLORS = 23
 # -------------------- TRAINING SETTINGS -------------------- 
 UNIT = torch.half
 
-ENCODING = 'ordinal'
+ENCODING = 'binary'
 
 if ENCODING == 'binary':
     COLOR_ENCODING_SIZE = ceil(log2(N_COLORS))
@@ -42,11 +42,11 @@ else:
 PARTIAL_OBSERVABILITY = 0.5
 BATCH_NB = 5
 CHECKPOINT_PERIOD = 10000
-BATCH_SIZE = 8
-LR = 10**-6
+BATCH_SIZE = 16
+LR = 10**-4
 TARGET_UPDATE = 50
 MEM_SIZE = 20000
-PRIO_EPSILON = 1e-5
+PRIO_EPSILON = 1e-7
 ALPHA = 0.4
 BETA = 0.9
 GAMMA = 0.95

@@ -50,7 +50,7 @@ def train_model(hotstart:str = None):
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
-    optimizer = torch.optim.RMSprop(policy_net.parameters(),lr = LR,eps=1e-5)
+    optimizer = torch.optim.RMSprop(policy_net.parameters(),lr = LR,eps=1e-6)
 
 
     
@@ -86,13 +86,8 @@ def train_model(hotstart:str = None):
     pz = EternityPuzzle(sys.argv[-1])
     observation_mask = observation_mask[torch.randperm(neighborhood_size)]
     neighborhood = gen_neighborhood(state, observation_mask, swp_idx, swp_mask, rot_mask)
-    offset = (MAX_BSIZE + 2 - bsize) // 2
     display_solution(0,to_list(state,bsize),"start.png")
-    print(state[offset:offset+bsize,offset:offset+bsize])
-    print(neighborhood[0,offset:offset+bsize,offset:offset+bsize])
-    print(to_list(state,bsize))
-    print(pz.verify_solution(to_list(state,bsize)))
-    print(pz.verify_solution(to_list(neighborhood[0],bsize)))
+
     try:
         while 1:
 
@@ -110,6 +105,7 @@ def train_model(hotstart:str = None):
             state_val = eval_sol(state,bsize)
             new_state_val = eval_sol(new_state,bsize)
             reward = state_val - new_state_val
+            print(state_val,reward)
 
             memory.push(state,new_state,reward,observation_mask)
 
@@ -123,19 +119,27 @@ def train_model(hotstart:str = None):
             
             if len(memory) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
             
-                print("aaaa",pz.verify_solution(to_list(state,bsize)))
+                ok = pz.verify_solution(to_list(state,bsize))
+                print("aaaa",ok)
+
+                if ok == False:
+
+                    print(to_list(state,bsize))
+                    print(expected_state_values)
+                    print(eltwise_loss)
+                    print(reward_batch)
+                    raise ValueError
+
                 for _ in range(BATCH_NB):
 
                     batch = memory.sample()
-
-                    # TODO: No numpy
 
                     state_batch =  batch.state.unsqueeze(1).to(device)
                     next_state_batch = batch.next_state.to(device)
                     reward_batch =  batch.reward.to(device)
                     mask_batch = batch.mask.to(device)
                     weights = batch.weights.to(device)
-
+                    print(reward_batch.max())
                     state_values = policy_net(state_batch)
 
                     next_state_values = torch.zeros(BATCH_SIZE, device=device)
@@ -193,7 +197,7 @@ def train_model(hotstart:str = None):
     # reporter.report()
     l = to_list(state,bsize)
     print("aaaa",pz.verify_solution(to_list(state,bsize)))
-    
+    print(eval_sol(state,bsize))
     display_solution(0,l,"yat.png")
 
     return 
@@ -274,7 +278,7 @@ def swap_elements(state:Tensor, swp_idx:Tensor, swp_mask:Tensor) -> Tensor:
 
 
 
-def eval_sol(state:Tensor, bsize:int, encoding = 'binary') -> int:
+def eval_sol(state:Tensor, bsize:int) -> int:
     """
     Evaluates the quality of a solution.
     /!\ This only is the true number of connections if the solution was created
@@ -291,20 +295,26 @@ def eval_sol(state:Tensor, bsize:int, encoding = 'binary') -> int:
     board = state[offset:offset+bsize,offset:offset+bsize]
     
     extended_board = state[offset-1:offset+bsize+1,offset-1:offset+bsize+1]
+    display_solution(0,to_list(state,bsize),'ouuuut')
 
-    n_offset = extended_board[2:,1:-1,:COLOR_ENCODING_SIZE]
-    s_offset = extended_board[:-2,1:-1,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
-    w_offset = extended_board[1:-1,:-2,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
-    e_offset = extended_board[1:-1,2:,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
+    n_offset = extended_board[2:,1:-1,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
+    s_offset = extended_board[:-2,1:-1,:COLOR_ENCODING_SIZE]
+    w_offset = extended_board[1:-1,:-2,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
+    e_offset = extended_board[1:-1,2:,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
 
-    n_connections = board[:,:,:COLOR_ENCODING_SIZE] - n_offset
-    s_connections = board[:,:,COLOR_ENCODING_SIZE: 2*COLOR_ENCODING_SIZE] - s_offset
-    w_connections = board[:,:,2*COLOR_ENCODING_SIZE: 3*COLOR_ENCODING_SIZE] - w_offset
-    e_connections = board[:,:,3*COLOR_ENCODING_SIZE: 4*COLOR_ENCODING_SIZE] - e_offset
+    n_connections = board[:,:,:COLOR_ENCODING_SIZE] == n_offset
+    s_connections = board[:,:,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE] == s_offset
+    w_connections = board[:,:,2*COLOR_ENCODING_SIZE: 3*COLOR_ENCODING_SIZE] == w_offset
+    e_connections = board[:,:,3*COLOR_ENCODING_SIZE: 4*COLOR_ENCODING_SIZE] == e_offset
 
-    total_connections = n_connections.count_nonzero() + s_connections.count_nonzero() + e_connections.count_nonzero() + w_connections.count_nonzero()
 
-    
+    redundant_ns = torch.logical_and(n_connections[:-1,:],s_connections[1:,:])
+    redundant_we = torch.logical_and(w_connections[:,1:],e_connections[:,:-1])
+
+    redundant_connections = torch.all(redundant_we,dim=-1).sum() + torch.all(redundant_ns,dim=-1).sum()
+
+    total_connections = (torch.all(n_connections,dim=-1).sum() + torch.all(s_connections,dim=-1).sum() + torch.all(e_connections,dim=-1).sum() + torch.all(w_connections,dim=-1).sum())
+
     return total_connections
 
 

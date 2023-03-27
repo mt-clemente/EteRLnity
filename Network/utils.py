@@ -213,14 +213,22 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
         # center the playable board as much as possible
         offset = (MAX_BSIZE - b_size) // 2 + 1
         #one hot encode the colors
-        for i in range(offset, offset + b_size):
-            for j in range(offset, offset + b_size):
+        for i in range(0,MAX_BSIZE+2):
+            for j in range(0,MAX_BSIZE+2):
 
-                tens[i,j,:] = 0
+                if i >= offset and i < offset+b_size and j >= offset and j < offset+b_size:
+                    tens[i,j,:] = 0
 
-                for dir in range(4):
-                    tens[i,j, dir * N_COLORS + sol[(i - offset) * b_size + (j-offset)][dir]] = 1
+                    for dir in range(4):
+                        tens[i,j, dir * N_COLORS + sol[(i - offset) * b_size + (j-offset)][dir]] = 1
+                    
+                else:
+                    for dir in range(4):
+                        tens[i,j, dir * N_COLORS] = 1
+                    
 
+            
+        
 
     return tens
 
@@ -265,10 +273,7 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
 
                 for dir in range(4):
 
-                    try: #FIXME:
-                        temp[dir] = torch.where(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE] == 1)[0].item()
-                    except:
-                        temp[dir] = 25
+                    temp[dir] = torch.where(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE] == 1)[0].item()
                 list_sol.append(tuple(temp))
 
     return list_sol
