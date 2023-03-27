@@ -6,17 +6,17 @@ from segment_tree import MinSegmentTree, SumSegmentTree
 
 from pytorch_memlab import profile
 
-
+UNIT = torch.double
 
 # Memory buffer with PER
 class PrioritizedReplayMemory():
 
-    def __init__(self, size,Transition,alpha, batch_size,max_bsize,n_colors):
+    def __init__(self, size,Transition,alpha, batch_size,max_bsize,encoding_size):
 
         self.Transition = Transition
-        self.state_buf = torch.empty((size,max_bsize+2,max_bsize+2,n_colors*4),dtype=torch.float64)
-        self.next_state_buf = torch.empty((size,max_bsize+2,max_bsize+2,n_colors*4))
-        self.rews_buf = torch.zeros(size, dtype=torch.float32)
+        self.state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size),dtype=UNIT)
+        self.next_state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size),dtype=UNIT)
+        self.rews_buf = torch.zeros(size, dtype=UNIT)
         self.max_size = size
         self.batch_size =  batch_size
         self.ptr = 0
@@ -24,8 +24,6 @@ class PrioritizedReplayMemory():
         self.max_priority = 1
         self.tree_ptr = 0
         self.alpha = alpha
-
-        print(self.state_buf.device)
 
         tree_capacity = 1
         while tree_capacity < size:
@@ -125,7 +123,7 @@ class PrioritizedReplayMemory():
 # Neural Network used in our model
 class DQN(nn.Module):
 
-    def __init__(self, h, w, outputs, device, n_colors):
+    def __init__(self, h, w, outputs, device, encoding_size):
 
         k1 = 3
         k2 = 3
@@ -136,8 +134,8 @@ class DQN(nn.Module):
         self.conv3d1 = nn.Conv3d(
             in_channels=1,
             out_channels=16,
-            kernel_size= (k1,k1, 4 * n_colors),
-            # dtype=torch.half,
+            kernel_size= (k1,k1, 4 * encoding_size),
+            dtype=UNIT,
             device=self.device,
             )
         
@@ -147,7 +145,7 @@ class DQN(nn.Module):
             16,
             kernel_size=k2,
             stride=1,
-            # dtype=torch.half,
+            dtype=UNIT,
             device=self.device
             )
         
@@ -158,7 +156,7 @@ class DQN(nn.Module):
             8,
             kernel_size=k3,
             stride=1,
-            # dtype=torch.half,
+            dtype=UNIT,
             device=self.device
             )
         self.bn3 = nn.BatchNorm2d(8, device=self.device)
@@ -175,14 +173,12 @@ class DQN(nn.Module):
             linear_input_size,
             outputs,
             device=self.device,
-            # dtype=torch.half
+            dtype=UNIT
             )
 
         # self.half()
 
     def forward(self, x:torch.Tensor):
-        x = x.float()
-        print(x.dtype,type(self.conv3d1))
         x = x.to(self.device)
         x = self.conv3d1(x).squeeze(-1)
         x = F.relu(self.bn1(x))

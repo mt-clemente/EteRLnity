@@ -69,11 +69,18 @@ def swap_elements(state_batch:Tensor, swp_idx:Tensor, masks:Tensor, return_prev:
     return swapped_batch
 
 
-swp_idx = _gen_swp_idx(2)
+""" swp_idx = _gen_swp_idx(2)
 swap_scatter_mask = _gen_masks(2,swp_idx)
 
 a = torch.arange(4).reshape((2,2))
 a = repeat(a,'i j -> b i j', b = comb(4,2))
 a = swap_elements(a,swp_idx,swap_scatter_mask)
 print("\n\n\n")
-print(a)
+print(a) """
+
+
+def binary(x, bits):
+    mask = 2**torch.arange(bits)
+    return x.unsqueeze(-1).bitwise_and(mask).ne(0).float()
+
+print(binary(torch.tensor(5),5))
