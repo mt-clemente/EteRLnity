@@ -13,35 +13,6 @@ from utils import *
 from param import *
 
 
-# FIXME:
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME:
-# FIXME:
-# FIXME:
-# FIXME:
-
-
 
 def train_model(hotstart:str = None):
 
@@ -50,8 +21,6 @@ def train_model(hotstart:str = None):
     :param eternity_puzzle: object describing the input
     :return: a tuple (solution, cost) where solution is a list of the pieces (rotations applied) and
         cost is the cost of the solution
-    TODO: Only 2-swap the inner tiles (not the borders), reduces the neighborhood size from 
-          nCr(16*16,2) to nCr(14*14,2) approx.
     """
 
 
@@ -87,10 +56,9 @@ def train_model(hotstart:str = None):
     
     # -------------------- GAME INIT --------------------
 
-    state = initialize_sol(sys.argv[-1])
+    state, bsize = initialize_sol(sys.argv[-1])
     
     state = state.to(dtype=UNIT)
-    bsize = state.size()[0] - 2
 
     swp_idx = gen_swp_idx(bsize)
     swp_mask, rot_mask = gen_masks(bsize,swp_idx)
@@ -115,9 +83,16 @@ def train_model(hotstart:str = None):
     # -------------------- TRAINING LOOP --------------------
 
     step = 0
+    pz = EternityPuzzle(sys.argv[-1])
     observation_mask = observation_mask[torch.randperm(neighborhood_size)]
     neighborhood = gen_neighborhood(state, observation_mask, swp_idx, swp_mask, rot_mask)
-
+    offset = (MAX_BSIZE + 2 - bsize) // 2
+    display_solution(0,to_list(state,bsize),"start.png")
+    print(state[offset:offset+bsize,offset:offset+bsize])
+    print(neighborhood[0,offset:offset+bsize,offset:offset+bsize])
+    print(to_list(state,bsize))
+    print(pz.verify_solution(to_list(state,bsize)))
+    print(pz.verify_solution(to_list(neighborhood[0],bsize)))
     try:
         while 1:
 
@@ -132,8 +107,8 @@ def train_model(hotstart:str = None):
 
 
             #reward
-            state_val = eval_sol(state)
-            new_state_val = eval_sol(new_state)
+            state_val = eval_sol(state,bsize)
+            new_state_val = eval_sol(new_state,bsize)
             reward = state_val - new_state_val
 
             memory.push(state,new_state,reward,observation_mask)
@@ -148,6 +123,7 @@ def train_model(hotstart:str = None):
             
             if len(memory) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
             
+                print("aaaa",pz.verify_solution(to_list(state,bsize)))
                 for _ in range(BATCH_NB):
 
                     batch = memory.sample()
@@ -212,10 +188,15 @@ def train_model(hotstart:str = None):
 
     except KeyboardInterrupt:
         pass
-    reporter = MemReporter()
-    reporter.report()
 
-    return to_list(state)
+    reporter = MemReporter()
+    # reporter.report()
+    l = to_list(state,bsize)
+    print("aaaa",pz.verify_solution(to_list(state,bsize)))
+    
+    display_solution(0,l,"yat.png")
+
+    return 
 
 
 def gen_neighborhood(state:Tensor, observation_mask:Tensor, swp_idx:Tensor, swp_mask:Tensor, rot_mask:Tensor):
@@ -230,7 +211,6 @@ def gen_neighborhood(state:Tensor, observation_mask:Tensor, swp_idx:Tensor, swp_
     swp_idx, swp_mask, rot_mask are fixed masks that represent swapped and rotated elements.
 
     """
-
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     obs_swp_idx = swp_idx[observation_mask[:swp_idx.size()[0]]].to(device=device)
@@ -252,15 +232,15 @@ def rotate_elements(state:Tensor, rot_mask:Tensor):
     4 times (one for each rotation angle) of shape [board_size**2*4, board_size, board_size, 4*color_encoding_size ]
     """
 
-    state_batch = repeat(torch.zeros_like(state), 'i j c -> k i j c',k=rot_mask.size()[0])
+    state_batch = repeat(state, 'i j c -> k i j c',k=rot_mask.size()[0])
     rolled = state_batch.clone()
     
     for dir in range(4):
         rolled[dir] = state_batch[0].roll(COLOR_ENCODING_SIZE * dir,dims=-1)
     
     state_batch = torch.where(rot_mask,rolled,state_batch)
-
     return state_batch
+
 
     
 
@@ -286,9 +266,6 @@ def swap_elements(state:Tensor, swp_idx:Tensor, swp_mask:Tensor) -> Tensor:
     t1 = expanded_state[torch.arange(expanded_state.size()[0]), i[:,0], i[:,1]]
     t2 = expanded_state[torch.arange(expanded_state.size()[0]), j[:,0], j[:,1]]
 
-    print(expanded_state.size())
-    print(t2.size())
-    print(swp_mask.size())
     swapped_batch = expanded_state.masked_scatter(swp_mask[0], t2) # FIXME: inplace error
     swapped_batch.masked_scatter_(swp_mask[1], t1)
     
@@ -297,29 +274,37 @@ def swap_elements(state:Tensor, swp_idx:Tensor, swp_mask:Tensor) -> Tensor:
 
 
 
-
-
-def eval_sol(sol:Tensor,encoding = 'binary') -> int:
+def eval_sol(state:Tensor, bsize:int, encoding = 'binary') -> int:
     """
     Evaluates the quality of a solution.
     /!\ This only is the true number of connections if the solution was created
     with side_importance = 1 /!\ 
+
+    Input
+    --------
+    state: evaluated state of size [max_board_size + 2, max_board_size + 2, 4 * color_encoding_size]
     TODO: Shape the reward to help learning that only the sides are grey
     """
-    board = sol[1:-1,1:-1]
-    n_offset = sol[:-2,1:-1,:COLOR_ENCODING_SIZE]
-    s_offset = sol[2:,1:-1,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
-    e_offset = sol[1:-1,2:,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
-    w_offset = sol[1:-1,:-2,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
 
+    offset = (MAX_BSIZE + 2 - bsize) // 2
+    
+    board = state[offset:offset+bsize,offset:offset+bsize]
+    
+    extended_board = state[offset-1:offset+bsize+1,offset-1:offset+bsize+1]
+
+    n_offset = extended_board[2:,1:-1,:COLOR_ENCODING_SIZE]
+    s_offset = extended_board[:-2,1:-1,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
+    w_offset = extended_board[1:-1,:-2,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
+    e_offset = extended_board[1:-1,2:,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
 
     n_connections = board[:,:,:COLOR_ENCODING_SIZE] - n_offset
     s_connections = board[:,:,COLOR_ENCODING_SIZE: 2*COLOR_ENCODING_SIZE] - s_offset
-    e_connections = board[:,:,2*COLOR_ENCODING_SIZE: 3*COLOR_ENCODING_SIZE] - e_offset
-    w_connections = board[:,:,3*COLOR_ENCODING_SIZE: 4*COLOR_ENCODING_SIZE] - w_offset
+    w_connections = board[:,:,2*COLOR_ENCODING_SIZE: 3*COLOR_ENCODING_SIZE] - w_offset
+    e_connections = board[:,:,3*COLOR_ENCODING_SIZE: 4*COLOR_ENCODING_SIZE] - e_offset
 
     total_connections = n_connections.count_nonzero() + s_connections.count_nonzero() + e_connections.count_nonzero() + w_connections.count_nonzero()
 
+    
     return total_connections
 
 

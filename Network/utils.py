@@ -19,15 +19,11 @@ import numpy as np
 def initialize_sol(instance_file:str):
 
     pz = EternityPuzzle(instance_file)
-    
     tens = to_tensor(pz.piece_list.copy(),ENCODING)
 
-    sol = to_list(tens,ENCODING)
-    
-    raise OSError
+    return tens, pz.board_size
 
-
-def gen_swp_idx(size:int, no_offset:bool = True) -> Tensor:
+def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
     """
     Generates the swap indexes for every 2-swap available.
     For efficiency, the borders (tiles containing grey) can only be swapped
@@ -67,10 +63,12 @@ def gen_swp_idx(size:int, no_offset:bool = True) -> Tensor:
     print(k)
     swp_idx = torch.tensor(swp_idx,dtype=int,device='cuda' if torch.cuda.is_available() else 'cpu')
     # the board does not cover the whole state, we only swap playable tiles
+    
     if no_offset:
         return swp_idx
-    
-    offset = (MAX_BSIZE - size) // 2 + 1
+
+    offset = (MAX_BSIZE + 2 - size) // 2
+
     return swp_idx + offset
 
 def gen_masks(size, swp_idx):
@@ -84,13 +82,13 @@ def gen_masks(size, swp_idx):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    swp_mask_batch = torch.zeros(swp_idx.shape[0], size + 2, size + 2, 4 * COLOR_ENCODING_SIZE ,2, dtype=torch.bool,device=device)
+    swp_mask_batch = torch.zeros(swp_idx.shape[0], MAX_BSIZE + 2, MAX_BSIZE + 2, 4 * COLOR_ENCODING_SIZE ,2, dtype=torch.bool,device=device)
 
     i = swp_idx[:,0]
     j = swp_idx[:,1]
 
-    swp_mask_batch[torch.arange(swp_mask_batch.size()[0]), i[:,0], i[:,1],:,0] = 1
-    swp_mask_batch[torch.arange(swp_mask_batch.size()[0]), j[:,0], j[:,1],:,1] = 1
+    swp_mask_batch[torch.arange(swp_mask_batch.size()[0]), i[:,0],i[:,1],:,0] = 1
+    swp_mask_batch[torch.arange(swp_mask_batch.size()[0]), j[:,0],j[:,1],:,1] = 1
 
     swp_mask_batch = rearrange(swp_mask_batch,'b i j c k -> k b i j c',k=2) == 1
 
@@ -149,6 +147,8 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
                     list_sol.pop(i)
                     break
 
+    b_size = int(len(sol)**0.5)
+
     if encoding == 'binary':
         color_enc_size = ceil(torch.log2(torch.tensor(N_COLORS)))
         tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
@@ -162,10 +162,9 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
         tens[:,MAX_BSIZE+1,3*color_enc_size:] = binary(torch.tensor(GRAY),color_enc_size)
 
 
-        b_size = int(len(sol)**0.5)
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
+        offset = (MAX_BSIZE + 2 - b_size) // 2
         #one hot encode the colors
         for i in range(offset, offset + b_size):
             for j in range(offset, offset + b_size):
@@ -186,8 +185,6 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
         tens[MAX_BSIZE+1,:,0] = 0
         tens[:,MAX_BSIZE+1,3] = 0
 
-
-        b_size = int(len(sol)**0.5)
 
         # center the playable board as much as possible
         offset = (MAX_BSIZE - b_size) // 2 + 1
@@ -213,8 +210,6 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
         tens[:,MAX_BSIZE+1,N_COLORS * 3 + GRAY] = 1
 
 
-        b_size = int(len(sol)**0.5)
-
         # center the playable board as much as possible
         offset = (MAX_BSIZE - b_size) // 2 + 1
         #one hot encode the colors
@@ -236,40 +231,45 @@ def base10(x:Tensor):
     
     return int(s)
 
-def to_list(sol:torch.Tensor, encoding='binary') -> list:
+def to_list(sol:torch.Tensor,bsize:int) -> list:
 
     list_sol = []
 
-    if encoding == 'binary':
+    offset = (MAX_BSIZE + 2 - bsize) // 2
 
-        for i in range(1, sol.shape[0] - 1):
-            for j in range(1, sol.shape[0] - 1):
+    if ENCODING == 'binary':
+
+        for i in range(offset, offset + bsize):
+            for j in range(offset, offset + bsize):
 
                 temp = [0]*4
                 for dir in range(4):
-                    print(sol[i,j])
                     temp[dir] = base10(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE])
                 
                 list_sol.append(tuple(temp))
     
-    elif encoding == 'ordinal':
+    elif ENCODING == 'ordinal':
 
-        for i in range(1, sol.shape[0] - 1):
-            for j in range(1, sol.shape[0] - 1):
+        for i in range(offset, offset + bsize):
+            for j in range(offset, offset + bsize):
 
                 temp = sol[i,j]
                 list_sol.append(tuple(temp.tolist()))
 
-    if encoding == 'one_hot':
+    if ENCODING == 'one_hot':
 
-        for i in range(1, sol.shape[0] - 1):
-            for j in range(1, sol.shape[0] - 1):
+        for i in range(offset, offset + bsize):
+            for j in range(offset, offset + bsize):
 
-                temp = torch.where(sol[i,j] == 1)[0]
+                temp = [0] * 4
+
                 for dir in range(4):
-                    temp[dir] -= dir * COLOR_ENCODING_SIZE
-                
-                list_sol.append(tuple(temp.tolist()))
+
+                    try: #FIXME:
+                        temp[dir] = torch.where(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE] == 1)[0].item()
+                    except:
+                        temp[dir] = 25
+                list_sol.append(tuple(temp))
 
     return list_sol
 

@@ -10,7 +10,7 @@ PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
 # global 2-swap gives a size 32640 neighborhood which can be too much
 # for the GPU. Capping the swapping range helps reduce the neighborhood
 # without losing connectivity.
-SWAP_RANGE = 4
+SWAP_RANGE = 2
 
 MAX_BSIZE = 16
 NORTH = 0
@@ -28,7 +28,7 @@ N_COLORS = 23
 # -------------------- TRAINING SETTINGS -------------------- 
 UNIT = torch.half
 
-ENCODING = 'one_hot'
+ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
     COLOR_ENCODING_SIZE = ceil(log2(N_COLORS))
@@ -50,4 +50,4 @@ PRIO_EPSILON = 1e-5
 ALPHA = 0.4
 BETA = 0.9
 GAMMA = 0.95
-TRAIN_FREQ = 100
+TRAIN_FREQ = 10

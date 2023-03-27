@@ -61,12 +61,12 @@ class PrioritizedReplayMemory():
         assert beta > 0
         
         indices = self._sample_proportional()
-        try:        
-            state = self.state_buf[indices]
-        except:
-            print(indices)
-            print(self.__dict__)
-            raise OSError
+        # try:        
+        state = self.state_buf[indices]
+        # except:
+            # print(indices)
+            # print(self.__dict__)
+            # raise OSError
         next_state = self.next_state_buf[indices]
         rews = self.rews_buf[indices]
         mask = self.obs_mask_buf[indices]
