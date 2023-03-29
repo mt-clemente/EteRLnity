@@ -1,7 +1,6 @@
 from math import log2,ceil
 import torch
 
-
 # -------------------- PUZZLE SETTINGS -------------------- 
 
 PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
@@ -10,7 +9,7 @@ PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
 # global 2-swap gives a size 32640 neighborhood which can be too much
 # for the GPU. Capping the swapping range helps reduce the neighborhood
 # without losing connectivity.
-SWAP_RANGE = 2
+SWAP_RANGE = 4
 
 MAX_BSIZE = 16
 NORTH = 0
@@ -39,15 +38,35 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-PARTIAL_OBSERVABILITY = 0.5
-BATCH_NB = 5
-CHECKPOINT_PERIOD = 10000
-BATCH_SIZE = 16
-LR = 10**-4
-TARGET_UPDATE = 50
-MEM_SIZE = 20000
+PARTIAL_OBSERVABILITY = 1
+BATCH_NB = 1
+CHECKPOINT_PERIOD = 2000
+BATCH_SIZE = 1024
+LR = 10**-5
+TARGET_UPDATE = 1000
+MEM_SIZE = 2**16 # Has to be a power of two // use of segment trees
+OPT_EPSILON = 1e-6
 PRIO_EPSILON = 1e-7
-ALPHA = 0.4
+ALPHA = 0.2
 BETA = 0.9
-GAMMA = 0.95
-TRAIN_FREQ = 10
+GAMMA = 0.975
+TRAIN_FREQ = 100
+TABU_LENGTH = 100
+
+
+CONFIG = {
+    'swap_range':SWAP_RANGE,
+    'encoding':ENCODING,
+    'unit':UNIT,
+    'partial_observability':PARTIAL_OBSERVABILITY,
+    'Batch size':BATCH_SIZE,
+    'Learning rate':LR,
+    'Target update':TARGET_UPDATE,
+    'Replay size':MEM_SIZE,
+    'Prio epsilon':PRIO_EPSILON,
+    'Alpha':ALPHA,
+    'Beta':BETA,
+    'Gamma':GAMMA,
+    'Train frequence':TRAIN_FREQ,
+    'Tabu length': TABU_LENGTH
+}

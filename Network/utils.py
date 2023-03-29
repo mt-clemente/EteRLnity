@@ -1,3 +1,5 @@
+import argparse
+import random
 import sys
 import torch
 from torch import Tensor
@@ -16,9 +18,20 @@ import numpy as np
 
 # -------------------- UTILS --------------------
 
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+
+    # Instances parameters
+    parser.add_argument('--instance', type=str, default='input')
+    parser.add_argument('--hotstart', type=str, default=False)
+
+    return parser.parse_args()
+
+
 def initialize_sol(instance_file:str):
 
     pz = EternityPuzzle(instance_file)
+    random.shuffle(pz.piece_list)    
     tens = to_tensor(pz.piece_list.copy(),ENCODING)
 
     return tens, pz.board_size
@@ -51,8 +64,8 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
             if  max(abs(i1-i2),abs(j1-j2)) > SWAP_RANGE:
                 continue
             
-            on_sides1 = (i1 == 0) or (i1 == MAX_BSIZE - 1) or (j1 == 0) or (j1 == MAX_BSIZE - 1)
-            on_sides2 = (i2 == 0) or (i2 == MAX_BSIZE - 1) or (j2 == 0) or (j2 == MAX_BSIZE - 1)
+            on_sides1 = (i1 == 0) or (i1 == size - 1) or (j1 == 0) or (j1 == size - 1)
+            on_sides2 = (i2 == 0) or (i2 == size - 1) or (j2 == 0) or (j2 == size - 1)
 
             # only swap borders with borders
             if on_sides1 != on_sides2:
@@ -60,7 +73,6 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
 
             swp_idx.append([[i1,j1],[i2,j2]])
             k += 1
-    print(k)
     swp_idx = torch.tensor(swp_idx,dtype=int,device='cuda' if torch.cuda.is_available() else 'cpu')
     # the board does not cover the whole state, we only swap playable tiles
     
@@ -74,9 +86,7 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
 def gen_masks(size, swp_idx):
     """
     Generates masks according to the given indexes.
-
-    output shape: [2, batch_size, board_size, board_size]
-
+    FIXME:
     Where the first dimension represents the first or second element swapped.
     """
 
@@ -92,13 +102,15 @@ def gen_masks(size, swp_idx):
 
     swp_mask_batch = rearrange(swp_mask_batch,'b i j c k -> k b i j c',k=2) == 1
 
-    rot_mask_batch  = torch.zeros((MAX_BSIZE**2,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE),device=device)
+    rot_mask_batch  = torch.zeros((3 * size**2 ,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE),device=device)
 
-    for i in range(MAX_BSIZE):
-        for j in range(MAX_BSIZE):
-            rot_mask_batch[i*MAX_BSIZE+j,i,j,:] = 1
+    offset = (MAX_BSIZE + 2 - size) // 2
+    for i in range(offset, offset + size):
+        for j in range(offset, offset + size):
+            for dir in range(3):
+                rot_mask_batch[(i-offset)* size * 3+ (j-offset) * 3 + dir,i,j,:] = 1
             
-    rot_mask_batch = repeat(rot_mask_batch,'k i j c -> (a k) i j c',a=4) == 1
+    rot_mask_batch = rot_mask_batch == 1
 
     return swp_mask_batch, rot_mask_batch
 
@@ -121,6 +133,10 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
     TODO: convert the list to tensor once 
 
     """
+
+    # To be able to rotate tiles easily, it is better to have either NESW or NWSE
+    orientation = [0,2,1,3]
+
     list_sol = list_sol.copy()
     b_size = int(len(list_sol)**0.5)
 
@@ -171,8 +187,9 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
 
                 tens[i,j,:] = 0
 
-                for dir in range(4):
-                    tens[i,j, dir * color_enc_size:(dir+1) * color_enc_size] = binary(torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir]),color_enc_size)
+                for d in range(4):
+                    dir = orientation[d]
+                    tens[i,j, d * color_enc_size:(d+1) * color_enc_size] = binary(torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir]),color_enc_size)
 
     elif encoding == 'ordinal':
         tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
@@ -194,8 +211,9 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
 
                 tens[i,j,:] = 0
 
-                for dir in range(4):
-                    tens[i,j,dir] = torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir])
+                for d in range(4):
+                    dir = orientation[d]
+                    tens[i,j,d] = torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir])
         
         tens.unsqueeze(-1)
 
@@ -219,12 +237,13 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
                 if i >= offset and i < offset+b_size and j >= offset and j < offset+b_size:
                     tens[i,j,:] = 0
 
-                    for dir in range(4):
-                        tens[i,j, dir * N_COLORS + sol[(i - offset) * b_size + (j-offset)][dir]] = 1
+                    for d in range(4):
+                        dir = orientation[d]
+                        tens[i,j, d * N_COLORS + sol[(i - offset) * b_size + (j-offset)][dir]] = 1
                     
                 else:
                     for dir in range(4):
-                        tens[i,j, dir * N_COLORS] = 1
+                        tens[i,j, orientation[dir] * N_COLORS] = 1
                     
 
             
@@ -239,9 +258,25 @@ def base10(x:Tensor):
     
     return int(s)
 
+def pprint(state,bsize):
+    offset = (MAX_BSIZE + 2 - bsize) // 2
+
+    if state.size()[0] != MAX_BSIZE + 2:
+        for s in state:
+            print(s[offset:offset+bsize,offset:offset+bsize])
+
+    else:
+        print(state[offset:offset+bsize,offset:offset+bsize])
+        
+
+
 def to_list(sol:torch.Tensor,bsize:int) -> list:
 
+    orientation = [0,2,1,3]
+
     list_sol = []
+
+    sol.int()
 
     offset = (MAX_BSIZE + 2 - bsize) // 2
 
@@ -251,8 +286,9 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
             for j in range(offset, offset + bsize):
 
                 temp = [0]*4
-                for dir in range(4):
-                    temp[dir] = base10(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE])
+                for d in range(4):
+                    dir = orientation[d]
+                    temp[d] = base10(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE])
                 
                 list_sol.append(tuple(temp))
     
@@ -261,8 +297,12 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
         for i in range(offset, offset + bsize):
             for j in range(offset, offset + bsize):
 
-                temp = sol[i,j]
-                list_sol.append(tuple(temp.tolist()))
+                temp = [0] * 4
+                for d in range(4):
+                    dir = orientation[d]
+                    temp[d] = sol[i,j,dir].item()
+
+                list_sol.append(tuple(temp))
 
     if ENCODING == 'one_hot':
 
@@ -271,153 +311,9 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
 
                 temp = [0] * 4
 
-                for dir in range(4):
-
-                    temp[dir] = torch.where(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE] == 1)[0].item()
+                for d in range(4):
+                    dir = orientation[d]
+                    temp[d] = torch.where(sol[i,j,dir*COLOR_ENCODING_SIZE:(dir+1)*COLOR_ENCODING_SIZE] == 1)[0].item()
                 list_sol.append(tuple(temp))
 
     return list_sol
-
-
-
-
-
-
-
-
-
-
-
-
-
-def display_solution(self, solution, output_file):
-
-    self = EternityPuzzle(sys.argv[-1])
-
-    if len(solution) < self.n_piece:
-        solution = solution + [(WHITE, WHITE, WHITE, WHITE)] * (self.n_piece - len(solution))
-
-    origin = 0
-    size = self.board_size + 2
-
-    color_dict = self.build_color_dict()
-
-    fig, ax = plt.subplots()
-
-    n_total_conflict = self.get_total_n_conflict(solution)
-
-    n_internal_conflict = 0
-
-    for j in range(size):  # y-axis
-        for i in range(size):  # x-axis
-            valid_draw = [0, size - 1]
-            if i in valid_draw or j in valid_draw:
-                ax.add_patch(patches.Rectangle((i, j), i + 1, j + 1, fill=True, facecolor=color_dict[GRAY],
-                                                edgecolor=color_dict[BLACK]))
-            else:
-                # ax.add_patch(patches.Rectangle((i, j), i + 1, j + 1, fill=True, facecolor='white', edgecolor='k'))
-
-                left_bot = (i, j)
-                right_bot = (i + 1, j)
-                right_top = (i + 1, j + 1)
-                left_top = (i, j + 1)
-                middle = (i + 0.5, j + 0.5)
-
-                instructions = [Path.MOVETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]
-
-                triangle_south_path = Path([left_bot, middle, right_bot, left_bot], instructions)
-                triangle_east_path = Path([right_top, middle, right_bot, right_top], instructions)
-                triangle_north_path = Path([right_top, middle, left_top, right_top], instructions)
-                triangle_west_path = Path([left_bot, middle, left_top, left_bot], instructions)
-
-                is_triangle_south_valid = True
-                is_triangle_north_valid = True
-                is_triangle_east_valid = True
-                is_triangle_west_valid = True
-
-                k = self.board_size * (j - 1) + (i - 1)
-                k_east = self.board_size * (j - 1) + (i - 2)
-                k_south = self.board_size * (j - 2) + (i - 1)
-
-                if i == 1:
-                    is_triangle_west_valid = (solution[k][WEST] == GRAY)  # 1 for Gray
-                elif i == size - 2:
-                    is_triangle_east_valid = (solution[k][EAST] == GRAY)
-                    is_triangle_west_valid = solution[k][WEST] == solution[k_east][EAST]
-                else:
-                    is_triangle_west_valid = solution[k][WEST] == solution[k_east][EAST]
-
-                if j == 1:
-                    is_triangle_south_valid = (solution[k][SOUTH] == GRAY)
-                elif j == size - 2:
-                    is_triangle_north_valid = (solution[k][NORTH] == GRAY)
-                    is_triangle_south_valid = solution[k][SOUTH] == solution[k_south][NORTH]
-                else:
-                    is_triangle_south_valid = solution[k][SOUTH] == solution[k_south][NORTH]
-
-                patch_south = patches.PathPatch(triangle_south_path, facecolor=color_dict[solution[k][SOUTH]],
-                                                edgecolor=color_dict[BLACK])
-
-                patch_north = patches.PathPatch(triangle_north_path, facecolor=color_dict[solution[k][NORTH]],
-                                                edgecolor=color_dict[BLACK])
-
-                patch_east = patches.PathPatch(triangle_east_path, facecolor=color_dict[solution[k][EAST]],
-                                                edgecolor=color_dict[BLACK])
-
-                patch_west = patches.PathPatch(triangle_west_path, facecolor=color_dict[solution[k][WEST]],
-                                                edgecolor=color_dict[BLACK])
-
-                if not is_triangle_south_valid:
-                    line_zip = list(zip(left_bot, right_bot))
-                    line = Line2D(line_zip[0], line_zip[1], color=color_dict[RED], lw=3)
-                    ax.add_line(line)
-
-                    if j != 1:
-                        n_internal_conflict += 1
-
-                if not is_triangle_north_valid:
-                    line_zip = list(zip(left_top, right_top))
-                    line = Line2D(line_zip[0], line_zip[1], color=color_dict[RED], lw=3)
-                    ax.add_line(line)
-
-                    if j != size - 2:
-                        n_internal_conflict += 1
-
-                if not is_triangle_west_valid:
-                    line_zip = list(zip(left_bot, left_top))
-                    line = Line2D(line_zip[0], line_zip[1], color=color_dict[RED], lw=3)
-                    ax.add_line(line)
-
-                    if i != 1:
-                        n_internal_conflict += 1
-
-                if not is_triangle_east_valid:
-                    line_zip = list(zip(right_bot, right_top))
-                    line = Line2D(line_zip[0], line_zip[1], color=color_dict[RED], lw=3)
-                    ax.add_line(line)
-
-                    if i != size - 2:
-                        n_internal_conflict += 1
-
-                ax.add_patch(patch_south)
-                ax.add_patch(patch_north)
-                ax.add_patch(patch_east)
-                ax.add_patch(patch_west)
-
-                k += 1
-
-    plt.xlim(origin, size)
-    plt.ylim(origin, size)
-
-    title = 'Eternity of size %d X %d\n' \
-            'Total connections: %d    Internal connections: %d\n' \
-            'Total Valid connections: %d     Internal valid internal connections: %d\n' \
-            'Total Invalid connections: %d    Internal invalid connections: %d' % \
-            (self.board_size, self.board_size,
-                self.n_total_connection, self.n_internal_connection,
-                self.n_total_connection - n_total_conflict, self.n_internal_connection - n_internal_conflict,
-                n_total_conflict, n_internal_conflict,
-                )
-    ax.set_title(title)
-
-    plt.savefig(output_file)
