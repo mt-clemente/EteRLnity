@@ -19,12 +19,12 @@ class PrioritizedReplayMemory():
         device = 'cpu'
 
         self.Transition = Transition
-        self.state_buf = np.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
+        self.state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
         self.next_state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
-        self.rews_buf = np.zeros(size)
-        self.target_max_val_buf = np.zeros(size)
-        self.state_val_buff = np.zeros(size)
-        self.obs_mask_buf = np.empty((size,neighborhood_size),dtype=bool)
+        self.rews_buf = torch.zeros(size)
+        self.target_max_val_buf = torch.zeros(size)
+        self.state_val_buff = torch.zeros(size)
+        self.obs_mask_buf = torch.empty((size,neighborhood_size),dtype=bool)
         self.max_size = size
         self.batch_size =  batch_size
         self.ptr = 0
@@ -260,6 +260,21 @@ class TabuList():
     
     def update(self,step:int):
         self.tabu = {k:v for k,v in self.tabu.items() if v > step}
+
+    def get_update(self,batch:torch.Tensor,step:int):
+
+        np_batch = batch.cpu().numpy()
+        for i in range(np_batch.shape[0]):
+
+            key = sha256(np_batch[i]).hexdigest()
+
+            if key not in self.tabu.keys():
+
+                self.push(batch[i],step)
+                return torch.from_numpy(np_batch[i]).to(device=batch.device).to(dtype=batch.dtype),i
+            
+        return None,None
+
 
     def fast_foward(self):
         vals = self.tabu.values()

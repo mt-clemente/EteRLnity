@@ -70,14 +70,20 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
             # only swap borders with borders
             if on_sides1 != on_sides2:
                 continue
+            
+            corners={(0,0),(0,size-1),(size-1,0),(size-1,size-1)}
+
+            on_corner1 = (i1,j1) in corners
+            on_corner2 = (i2,j2) in corners
+            
+            if on_corner1 != on_corner2:
+                continue
 
             swp_idx.append([[i1,j1],[i2,j2]])
             k += 1
     swp_idx = torch.tensor(swp_idx,dtype=int,device='cuda' if torch.cuda.is_available() else 'cpu')
     # the board does not cover the whole state, we only swap playable tiles
     
-    if no_offset:
-        return swp_idx
 
     offset = (MAX_BSIZE + 2 - size) // 2
 

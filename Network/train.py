@@ -13,6 +13,7 @@ import wandb
 import torchrl
 
 
+
 def train_model(hotstart:str = None):
 
     """
@@ -21,9 +22,6 @@ def train_model(hotstart:str = None):
     :return: a tuple (solution, cost) where solution is a list of the pieces (rotations applied) and
         cost is the cost of the solution
     """
-
-
-
 
     # -------------------- NETWORK INIT -------------------- 
 
@@ -49,14 +47,16 @@ def train_model(hotstart:str = None):
                                       )
 
 
+    action_nb = comb((MAX_BSIZE-2)**2,2) + comb(4*(MAX_BSIZE-2),2) + comb(4,2) + MAX_BSIZE ** 2 * 3
+
 
     if hotstart:
-        policy_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, 1, device,COLOR_ENCODING_SIZE)
+        policy_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, action_nb, device,COLOR_ENCODING_SIZE)
         policy_net.load_state_dict(torch.load(hotstart))
     else:
-        policy_net = DQN(MAX_BSIZE + 2, MAX_BSIZE + 2, 1, device, COLOR_ENCODING_SIZE)
+        policy_net = DQN(MAX_BSIZE + 2, MAX_BSIZE + 2, action_nb, device, COLOR_ENCODING_SIZE)
     
-    target_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, 1, device, COLOR_ENCODING_SIZE).to(device)
+    target_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, action_nb, device, COLOR_ENCODING_SIZE).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -70,10 +70,9 @@ def train_model(hotstart:str = None):
     
     state = state.to(dtype=UNIT)
 
-    swp_idx = gen_swp_idx(bsize)
-    swp_mask, rot_mask = gen_masks(bsize,swp_idx)
+    swp_idx = gen_swp_idx(MAX_BSIZE)
+    swp_mask, rot_mask = gen_masks(MAX_BSIZE,swp_idx)
     neighborhood_size = swp_idx.size()[0] + rot_mask.size()[0]
-    
     
     memory = PrioritizedReplayMemory(
         size=MEM_SIZE,
@@ -104,12 +103,10 @@ def train_model(hotstart:str = None):
 
     step = 0
     pz = EternityPuzzle(args.instance)
-    observation_mask = observation_mask[torch.randperm(neighborhood_size)]
-    neighborhood = gen_neighborhood(state, observation_mask, swp_idx, swp_mask, rot_mask)
     pz.display_solution(to_list(state,bsize),"start.png")
 
 
-
+    print("start")
 
     try:
         
@@ -126,42 +123,55 @@ def train_model(hotstart:str = None):
 
             while 1:
 
-
                 if step % 10 == 0:
                     print(step)
 
                 tabu.update(step)
-                heur_val = policy_net(neighborhood.unsqueeze(1))
 
                 with torch.no_grad():
-                    target_heur_val = target_net(neighborhood.unsqueeze(1)).max()
+                    heur_val = policy_net(state.unsqueeze(0).unsqueeze(0)).squeeze(0)
+                    target_heur_val = target_net(state.unsqueeze(0).unsqueeze(0)).max()
 
-                best_move_idx = torch.argsort(heur_val.squeeze(-1),descending=True)
-
+                best_move_idxs= torch.topk(heur_val,TABU_LENGTH + 1).indices
                 new_state = None
-                for idx in best_move_idx:
-                    if not tabu.in_tabu(neighborhood[idx]):
-                        new_state = neighborhood[idx].squeeze(0)
-                        best_idx = idx
-                        break
-                
-                if new_state is None:
-                    tabu.fast_foward()
-                    continue
 
-                tabu.push(new_state,step)
+                best_neighbors = gen_neighborhood(state,best_move_idxs,swp_idx,swp_mask,rot_mask)
+
+                if TABU_LENGTH != 0:
+                    new_state, new_idx = tabu.get_update(best_neighbors,step)
+                
+                    if new_state is None:
+                        tabu.fast_foward()
+                        continue
+                    
+                    tabu.push(new_state,step)
+
+                else:
+                    new_state = gen_neighbor(state,best_move_idxs,swp_idx,swp_mask,rot_mask)
+                    new_idx = best_move_idxs
+
+
                 #reward
                 new_state_val, score = eval_sol(new_state,bsize,best_score)
 
-                # if torch.all(new_state == state):
-                    # raise OSError
-                # if ((bsize + 1) * bsize * 2 - score) != pz.get_total_n_conflict(to_list(state,bsize)):
-                    # raise OSError
+                if torch.all(new_state == state):
+                    reward = - 2
+                
+                else:
+                    reward =  new_state_val + max(score - prev_state_score,0)
 
+                """ if torch.all(new_state == state):
+                    pass #raise OSError
+                if ((bsize + 1) * bsize * 2 - score) != pz.get_total_n_conflict(to_list(new_state,bsize)):
+                    pz.display_solution(to_list(state,bsize),f'old')
+                    pz.display_solution(to_list(new_state,bsize),f'new')
+                    raise OSError
+                """
+                
                 if score > best_score:
                     pz.display_solution(to_list(new_state,bsize),f'best_sol_{score}')
                     best_score = score
-                reward =  new_state_val + max(score - prev_state_score,0)
+                    
 
                 cpu_buf.push(
                     move_buffer.state,
@@ -171,30 +181,25 @@ def train_model(hotstart:str = None):
                     move_buffer.state_val,
                     observation_mask
                 )
+
                 
                 prev_state_score = score
                 move_buffer.state = state
                 move_buffer.reward = reward
-                move_buffer.state_val = heur_val[best_idx].detach()
+                move_buffer.state_val = heur_val[new_idx]
 
 
                 wandb.log({'Score':score})
                 state = new_state
 
-
-                observation_mask = observation_mask[torch.randperm(neighborhood_size)]
-                neighborhood = gen_neighborhood(new_state,observation_mask,swp_idx,swp_mask,rot_mask)
-
-                # wandb.log({'reward':reward,'State Q value':heur_val[best_move_idx]})
                 with torch.no_grad():
                     policy_prob = torch.softmax(heur_val,dim=0).squeeze(-1)
                     policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
-                    print((policy_entropy/max_entropy).squeeze(-1))
 
                 wandb.log(
                     {   
                         'Relative policy entropy': policy_entropy/max_entropy,
-                        'Q values':heur_val[best_idx],
+                        'Q values':heur_val[new_idx],
                         'Max next Q vlaues':target_heur_val,
                         'reward':reward,
                     }
@@ -203,89 +208,42 @@ def train_model(hotstart:str = None):
 
                 
                 if len(memory) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
+
+                    
+                    print((policy_entropy/max_entropy).squeeze(-1))
                 
-                    if random.random() > 1 - 10e-3:
+                    if random.random() > 1 - 10e-5:
                         ok = pz.verify_solution(to_list(state,bsize))
 
                         if ok == False:
                             
                             print(state)
                             print(to_list(state,bsize))
-                            print(expected_state_values)
-                            print(eltwise_loss)
-                            print(reward_batch)
+                            pz.display_solution(to_list(state,bsize))
                             raise ValueError
 
-                    for _ in range(BATCH_NB):
 
-                        torch.cuda.empty_cache()
+                    optimize_model(
+                        memory,
+                        policy_net,
+                        target_net,
+                        optimizer,
+                        device
+                    )
+                    
 
-                        batch = memory.sample()
+                # torch.cuda.empty_cache() 
 
-                        state_batch = torch.from_numpy(batch.state).unsqueeze(1).to(UNIT).to(device)
-                        # next_state_batch = torch.from_numpy(batch.next_state).to(UNIT).to(device)
-                        reward_batch = torch.from_numpy(batch.reward).to(UNIT).to(device)
-                        target_val = torch.from_numpy(batch.target_val).to(UNIT).to(device)
-                        old_state_vals = torch.from_numpy(batch.state_val).to(UNIT).to(device)
-                        # mask_batch = torch.from_numpy(batch.mask).to(UNIT).to(device)
-                        weights = torch.from_numpy(batch.weights).to(UNIT).to(device)
-                        state_values = policy_net(state_batch)
-
-                        next_state_values = target_val
-
-                        """ with torch.no_grad():
-
-                            a = [gen_neighborhood(next_state_batch[i],mask_batch[i],swp_idx,swp_mask,rot_mask) for i in range(BATCH_SIZE)]
-                            next_states = torch.cat(a)
-
-                            target_val = target_net(next_states.unsqueeze(1))
-                            target_val = rearrange(target_val.squeeze(-1), '(b n) -> b n ', b=BATCH_SIZE)
-                            next_state_values = torch.max(target_val, dim=1)[0] """
-
-                        expected_state_values = (next_state_values * GAMMA) + reward_batch
-
-                        criterion = nn.HuberLoss(reduction='none')
-                        eltwise_loss = criterion(state_values, expected_state_values.unsqueeze(1))
-
-                        loss = torch.mean(eltwise_loss * weights)
-
-                        optimizer.zero_grad()
-                        loss.backward()
-
-                        # gradient clipping
-                        for param in policy_net.parameters():
-                            param.grad.clamp_(-1,1)
-
-                        optimizer.step()
-
-                        # PER prio update
-                        prio_loss = eltwise_loss
-                        new_prio = prio_loss + PRIO_EPSILON
-                        memory.update_priorities(batch.indexes, new_prio.cpu().detach().numpy())
-                        
-                        if step > 500:
-                            wandb.log(
-                                {
-                                    'Train mean Q values':state_values.mean(),
-                                    'Train mean next Q values':next_state_values.mean(),
-                                    'Train mean expected Q vlaues':expected_state_values.mean(),
-                                    'Train mean reward':reward_batch.mean(),
-                                    'Train Loss':loss,
-                                }
-                            )
-
-                        # torch.cuda.empty_cache() 
-
-                        step += 1
-                        #target update
-                        if step % TARGET_UPDATE == 0:
-                            
-                            target_net.load_state_dict(policy_net.state_dict())
-                
-                        # checkpoint the policy net
-                        # if self.num_episode % (self.TARGET_UPDATE * self.TRAIN_FREQ) == 0:
-                        if step % CHECKPOINT_PERIOD == 0:
-                            torch.save(policy_net.state_dict(), f'models/checkpoint/{ENCODING}/{step // CHECKPOINT_PERIOD}.pt')
+                step += 1
+                #target update
+                if step % TARGET_UPDATE == 0:
+                    
+                    target_net.load_state_dict(policy_net.state_dict())
+        
+                # checkpoint the policy net
+                # if self.num_episode % (self.TARGET_UPDATE * self.TRAIN_FREQ) == 0:
+                if step % CHECKPOINT_PERIOD == 0:
+                    torch.save(policy_net.state_dict(), f'models/checkpoint/{ENCODING}/{step // CHECKPOINT_PERIOD}.pt')
 
 
     except KeyboardInterrupt:
@@ -293,12 +251,92 @@ def train_model(hotstart:str = None):
 
     # reporter = MemReporter()
     # reporter.report()
-    l = to_list(state,bsize)
     print("STILL VALID :",pz.verify_solution(to_list(state,bsize)))
     print(best_score)
     return 
 
-@torch.compile()
+
+
+
+
+
+
+
+
+def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQN, optimizer:torch.optim.Optimizer, device):
+
+    for _ in range(BATCH_NB):
+
+        torch.cuda.empty_cache()
+
+        batch = memory.sample()
+
+        state_batch = batch.state.unsqueeze(1).to(UNIT).to(device)
+        next_state_batch = batch.next_state.unsqueeze(1).to(UNIT).to(device)
+        reward_batch = batch.reward.to(UNIT).to(device)
+        target_val = batch.target_val.to(UNIT).to(device)
+        old_state_vals = batch.state_val.to(UNIT).to(device)
+        weights = torch.from_numpy(batch.weights).to(UNIT).to(device)
+
+
+        state_values = policy_net(state_batch).max(dim=-1).values
+
+        with torch.no_grad():
+            next_state_values = target_net(next_state_batch).max(dim=-1).values
+
+
+        expected_state_values = (next_state_values * GAMMA) + reward_batch
+
+        criterion = nn.HuberLoss(reduction='none')
+        eltwise_loss = criterion(state_values, expected_state_values)
+
+        loss = torch.mean(eltwise_loss * weights)
+
+        optimizer.zero_grad()
+        loss.backward()
+
+        # gradient clipping
+        for param in policy_net.parameters():
+            param.grad.clamp_(-1,1)
+
+        optimizer.step()
+
+        # PER prio update
+        prio_loss = eltwise_loss
+        new_prio = prio_loss + PRIO_EPSILON
+        memory.update_priorities(batch.indexes, new_prio.cpu().detach().numpy())
+
+        wandb.log(
+            {
+                'Train mean Q values':state_values.mean(),
+                'Train mean next Q values':next_state_values.mean(),
+                'Train mean expected Q vlaues':expected_state_values.mean(),
+                'Train mean reward':reward_batch.mean(),
+                'Train Loss':loss,
+            }
+        )
+
+
+
+
+
+
+def gen_neighbor(state:Tensor, idx:int, swp_idx:Tensor, swp_mask:Tensor, rot_mask:Tensor):
+    """
+    Generate one neighbor
+    """
+    if False and idx >= swp_idx.size()[0]:
+        idx = swp_idx.size()[0]
+        neighbor = rotate_elements(state,rot_mask[idx-swp_idx.size()[0]])
+
+    else:
+        idx = 0
+        neighbor = swap_elements(state,swp_idx[idx],swp_mask[:,idx])
+    return neighbor
+
+
+
+
 def gen_neighborhood(state:Tensor, observation_mask:Tensor, swp_idx:Tensor, swp_mask:Tensor, rot_mask:Tensor):
     """
     Generate state's an observed part of the full neighborhood including ranged 2-swaps depending
@@ -313,9 +351,9 @@ def gen_neighborhood(state:Tensor, observation_mask:Tensor, swp_idx:Tensor, swp_
     """
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    obs_swp_idx = swp_idx[observation_mask[:swp_idx.size()[0]]].to(device=device)
-    obs_swp_mask = swp_mask[:,observation_mask[:swp_idx.size()[0]]].to(device=device)
-    obs_rot_mask = rot_mask[observation_mask[swp_idx.size()[0]:]].to(device=device)
+    obs_swp_idx = swp_idx[observation_mask[observation_mask < swp_idx.size()[0]]].to(device=device)
+    obs_swp_mask = swp_mask[:,observation_mask[observation_mask < swp_idx.size()[0]]].to(device=device)
+    obs_rot_mask = rot_mask[observation_mask[observation_mask > swp_idx.size()[0]] - swp_idx.size()[0]].to(device=device)
 
 
     if obs_rot_mask.size()[0] == 0:
@@ -329,7 +367,7 @@ def gen_neighborhood(state:Tensor, observation_mask:Tensor, swp_idx:Tensor, swp_
     return torch.vstack((s,r))
 
 
-def rotate_elements(state:Tensor, rot_mask:Tensor):
+def rotate_elements(state:Tensor, rot_mask:Tensor, idx:int=0):
     """
     Generates the states that are one rotation away
 
@@ -340,17 +378,30 @@ def rotate_elements(state:Tensor, rot_mask:Tensor):
     4 times (one for each rotation angle) of shape [board_size**2*4, board_size, board_size, 4*color_encoding_size ]
     """
 
-    state_batch = repeat(state, 'i j c -> k i j c',k=rot_mask.size()[0])
-    rolled = torch.zeros((3,rot_mask.size()[0]//3,*state.size()),device=state.device,dtype=state.dtype)
+    # Only one element
+    if rot_mask.dim() == 3:
 
-    for dir in range(3):
-        rolled[dir,:] = state.roll(COLOR_ENCODING_SIZE * (dir+1),dims=-1)
+        rolled = state.clone()
 
-    rolled = rearrange(rolled,'dir k i j c -> (dir k) i j c')
+        rolled = state.roll(COLOR_ENCODING_SIZE * (idx % 3 + 1),dims=-1)
 
-    state_batch = torch.where(rot_mask,rolled,state_batch)
+        rolled = torch.where(rot_mask,rolled,state)
 
-    return state_batch
+        print("rolled")
+
+    else:
+
+        state_batch = repeat(state, 'i j c -> k i j c',k=rot_mask.size()[0])
+        rolled = torch.zeros((3,rot_mask.size()[0]//3,*state.size()),device=state.device,dtype=state.dtype)
+
+        for dir in range(3):
+            rolled[dir,:] = state.roll(COLOR_ENCODING_SIZE * (dir+1),dims=-1)
+
+        rolled = rearrange(rolled,'dir k i j c -> (dir k) i j c')
+
+        rolled = torch.where(rot_mask,rolled,state_batch)
+
+    return rolled
     
 
 
@@ -366,20 +417,28 @@ def swap_elements(state:Tensor, swp_idx:Tensor, swp_mask:Tensor) -> Tensor:
 
     TODO: Make inplace
     """
+    # One swap only
+    if swp_idx.dim() == 2:
+        swapped = state.clone()
+        i = swp_idx[0]
+        j = swp_idx[1]
+        swapped[[i[0],j[0]],[i[1],j[1]],:] = swapped[[j[0],i[0]],[j[1],i[1]],:]
+        
 
-    expanded_state = repeat(state, 'i j c -> b i j c', b=swp_idx.size()[0])
+    else:
+        expanded_state = repeat(state, 'i j c -> b i j c', b=swp_idx.size()[0])
 
-    i = swp_idx[:,0]
-    j = swp_idx[:,1]
+        i = swp_idx[:,0]
+        j = swp_idx[:,1]
 
-    t1 = expanded_state[torch.arange(expanded_state.size()[0]), i[:,0], i[:,1]]
-    t2 = expanded_state[torch.arange(expanded_state.size()[0]), j[:,0], j[:,1]]
+        t1 = expanded_state[torch.arange(expanded_state.size()[0]), i[:,0], i[:,1]]
+        t2 = expanded_state[torch.arange(expanded_state.size()[0]), j[:,0], j[:,1]]
 
-    swapped_batch = expanded_state.masked_scatter(swp_mask[0], t2) # FIXME: inplace error
-    swapped_batch.masked_scatter_(swp_mask[1], t1)
-    
+        swapped = expanded_state.masked_scatter(swp_mask[0], t2) # FIXME: inplace error
+        swapped.masked_scatter_(swp_mask[1], t1)
+        
     # Return the modified input expanded_state of tensors
-    return swapped_batch
+    return swapped
 
 
 
