@@ -27,7 +27,7 @@ N_COLORS = 23
 # -------------------- TRAINING SETTINGS -------------------- 
 UNIT = torch.half
 
-ENCODING = 'binary'
+ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
     COLOR_ENCODING_SIZE = ceil(log2(N_COLORS))

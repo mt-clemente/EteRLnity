@@ -70,8 +70,6 @@ def train_model(hotstart:str = None):
     
     state = state.to(dtype=UNIT)
 
-    INIT_SOL = to_list(state,bsize)
-
     swp_idx = gen_swp_idx(bsize)
     swp_mask, rot_mask = gen_masks(bsize,swp_idx)
     neighborhood_size = swp_idx.size()[0] + rot_mask.size()[0]
@@ -111,190 +109,183 @@ def train_model(hotstart:str = None):
     pz.display_solution(to_list(state,bsize),"start.png")
 
 
-    move_buffer.state = state
-    move_buffer.reward = 0
-    move_buffer.state_val = 0
-    best_score = 0
-    _, prev_state_score = eval_sol(state,bsize,best_score)
 
 
     try:
-
+        
         while 1:
 
-            if step % 10 == 0:
-                print(step)
-
-            tabu.update(step)
-            heur_val = policy_net(neighborhood.unsqueeze(1))
-
-            with torch.no_grad():
-                target_heur_val = target_net(neighborhood.unsqueeze(1)).max()
-
-            best_move_idx = torch.argsort(heur_val.squeeze(-1),descending=True)
-
-            new_state = None
-            for idx in best_move_idx:
-                if not tabu.in_tabu(neighborhood[idx]):
-                    new_state = neighborhood[idx].squeeze(0)
-                    best_idx = idx
-                    break
-            
-            if new_state is None:
-                tabu.fast_foward()
-                continue
-
-            tabu.push(new_state,step)
-            #reward
-            new_state_val, score = eval_sol(new_state,bsize,best_score)
-
-            # if torch.all(new_state == state):
-                # raise OSError
-            # if ((bsize + 1) * bsize * 2 - score) != pz.get_total_n_conflict(to_list(state,bsize)):
-                # raise OSError
-
-            if score > best_score:
-                pz.display_solution(to_list(new_state,bsize),f'best_sol_{score}')
-                best_score = score
-            reward =  new_state_val + max(score - prev_state_score,0)
-
-            cpu_buf.push(
-                move_buffer.state,
-                state,
-                move_buffer.reward,
-                target_heur_val,
-                move_buffer.state_val,
-                observation_mask
-            )
-            
-            prev_state_score = score
+            """ state, bsize = initialize_sol(args.instance)
+            state = state.to(dtype=UNIT)
+ """
             move_buffer.state = state
-            move_buffer.reward = reward
-            move_buffer.state_val = heur_val[best_idx].detach()
+            move_buffer.reward = 0
+            move_buffer.state_val = 0
+            best_score = 0
+            _, prev_state_score = eval_sol(state,bsize,best_score)
+
+            while 1:
 
 
-            wandb.log({'Score':score})
-            state = new_state
+                if step % 10 == 0:
+                    print(step)
 
+                tabu.update(step)
+                heur_val = policy_net(neighborhood.unsqueeze(1))
 
-            observation_mask = observation_mask[torch.randperm(neighborhood_size)]
-            neighborhood = gen_neighborhood(new_state,observation_mask,swp_idx,swp_mask,rot_mask)
+                with torch.no_grad():
+                    target_heur_val = target_net(neighborhood.unsqueeze(1)).max()
 
-            # wandb.log({'reward':reward,'State Q value':heur_val[best_move_idx]})
-            policy_prob = heur_val / heur_val.sum()
-            policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
-            print(heur_val.max(),heur_val.min(),heur_val.sum(),reward)
-            print((policy_entropy/max_entropy).squeeze(-1))
-            if heur_val.max() < 0:
-                print(heur_val.mean())
-                raise OSError
-            wandb.log(
-                {   
-                    'Relative policy entropy': policy_entropy/max_entropy,
-                    'Q values':heur_val[best_idx],
-                    'Max next Q vlaues':target_heur_val,
-                    'reward':reward,
-                }
-            )
-            # -------------------- MODEL OPTIMIZATION --------------------
+                best_move_idx = torch.argsort(heur_val.squeeze(-1),descending=True)
 
-            
-            if len(memory) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
-            
-                if random.random() > 1 - 10e-3:
-                    ok = pz.verify_solution(to_list(state,bsize))
-
-                    if ok == False:
-                        
-                        print(state)
-                        print(to_list(state,bsize))
-                        print(expected_state_values)
-                        print(eltwise_loss)
-                        print(reward_batch)
-                        raise ValueError
-
-                for _ in range(BATCH_NB):
-
-                    torch.cuda.empty_cache()
-
-                    batch = memory.sample()
-
-                    state_batch = torch.from_numpy(batch.state).unsqueeze(1).to(UNIT).to(device)
-                    # next_state_batch = torch.from_numpy(batch.next_state).to(UNIT).to(device)
-                    reward_batch = torch.from_numpy(batch.reward).to(UNIT).to(device)
-                    target_val = torch.from_numpy(batch.target_val).to(UNIT).to(device)
-                    old_state_vals = torch.from_numpy(batch.state_val).to(UNIT).to(device)
-                    # mask_batch = torch.from_numpy(batch.mask).to(UNIT).to(device)
-                    weights = torch.from_numpy(batch.weights).to(UNIT).to(device)
-                    state_values = policy_net(state_batch)
-
-                    next_state_values = target_val
-
-                    """ with torch.no_grad():
-
-                        a = [gen_neighborhood(next_state_batch[i],mask_batch[i],swp_idx,swp_mask,rot_mask) for i in range(BATCH_SIZE)]
-                        next_states = torch.cat(a)
-
-                        target_val = target_net(next_states.unsqueeze(1))
-                        target_val = rearrange(target_val.squeeze(-1), '(b n) -> b n ', b=BATCH_SIZE)
-                        next_state_values = torch.max(target_val, dim=1)[0] """
-
-                    expected_state_values = (next_state_values * GAMMA) + reward_batch
-
-                    criterion = nn.HuberLoss(reduction='none')
-                    eltwise_loss = criterion(state_values, expected_state_values.unsqueeze(1))
-
-                    loss = torch.mean(eltwise_loss * weights)
-
-                    optimizer.zero_grad()
-                    loss.backward()
-
-                    # gradient clipping
-                    for param in policy_net.parameters():
-                        param.grad.clamp_(-1,1)
-
-                    optimizer.step()
-
-                    # PER prio update
-                    prio_loss = eltwise_loss
-                    new_prio = prio_loss + PRIO_EPSILON
-                    memory.update_priorities(batch.indexes, new_prio.cpu().detach().numpy())
-
-                    pst_val = (state_values - state_values.min())/(state_values - state_values.min()).sum()
-                    old_pst_val = (old_state_vals - old_state_vals.min())/(old_state_vals - old_state_vals.min()).sum()
-                    print(pst_val.sum(),pst_val.min(),pst_val.min())
-                    print(old_pst_val.sum(),old_pst_val.min())
-                    indx = torch.log
-                    print("kl",torch.nn.functional.kl_div(pst_val[pst_val != 0 ],old_pst_val,reduction='mean').squeeze(-1))
-                    raise OSError
-                    if step > 500:
-                        wandb.log(
-                            {
-                                'Train mean Q values':state_values.mean(),
-                                'Train mean next Q values':next_state_values.mean(),
-                                'Train mean expected Q vlaues':expected_state_values.mean(),
-                                'Train mean reward':reward_batch.mean(),
-                                'Train Loss':loss,
-                                'KL Divergence':torch.nn.functional.kl_div(state_values,old_state_vals,reduction='batchmean')
-                            
-                            }
-                        )
-
-                    # torch.cuda.empty_cache() 
-
-
-
-
-            step += 1
-            #target update
-            if step % TARGET_UPDATE == 0:
+                new_state = None
+                for idx in best_move_idx:
+                    if not tabu.in_tabu(neighborhood[idx]):
+                        new_state = neighborhood[idx].squeeze(0)
+                        best_idx = idx
+                        break
                 
-                target_net.load_state_dict(policy_net.state_dict())
-    
-            # checkpoint the policy net
-            # if self.num_episode % (self.TARGET_UPDATE * self.TRAIN_FREQ) == 0:
-            if step % CHECKPOINT_PERIOD == 0:
-                torch.save(policy_net.state_dict(), f'models/checkpoint/{ENCODING}/{step // CHECKPOINT_PERIOD}.pt')
+                if new_state is None:
+                    tabu.fast_foward()
+                    continue
+
+                tabu.push(new_state,step)
+                #reward
+                new_state_val, score = eval_sol(new_state,bsize,best_score)
+
+                # if torch.all(new_state == state):
+                    # raise OSError
+                # if ((bsize + 1) * bsize * 2 - score) != pz.get_total_n_conflict(to_list(state,bsize)):
+                    # raise OSError
+
+                if score > best_score:
+                    pz.display_solution(to_list(new_state,bsize),f'best_sol_{score}')
+                    best_score = score
+                reward =  new_state_val + max(score - prev_state_score,0)
+
+                cpu_buf.push(
+                    move_buffer.state,
+                    state,
+                    move_buffer.reward,
+                    target_heur_val,
+                    move_buffer.state_val,
+                    observation_mask
+                )
+                
+                prev_state_score = score
+                move_buffer.state = state
+                move_buffer.reward = reward
+                move_buffer.state_val = heur_val[best_idx].detach()
+
+
+                wandb.log({'Score':score})
+                state = new_state
+
+
+                observation_mask = observation_mask[torch.randperm(neighborhood_size)]
+                neighborhood = gen_neighborhood(new_state,observation_mask,swp_idx,swp_mask,rot_mask)
+
+                # wandb.log({'reward':reward,'State Q value':heur_val[best_move_idx]})
+                with torch.no_grad():
+                    policy_prob = torch.softmax(heur_val,dim=0).squeeze(-1)
+                    policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
+                    print((policy_entropy/max_entropy).squeeze(-1))
+
+                wandb.log(
+                    {   
+                        'Relative policy entropy': policy_entropy/max_entropy,
+                        'Q values':heur_val[best_idx],
+                        'Max next Q vlaues':target_heur_val,
+                        'reward':reward,
+                    }
+                )
+                # -------------------- MODEL OPTIMIZATION --------------------
+
+                
+                if len(memory) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
+                
+                    if random.random() > 1 - 10e-3:
+                        ok = pz.verify_solution(to_list(state,bsize))
+
+                        if ok == False:
+                            
+                            print(state)
+                            print(to_list(state,bsize))
+                            print(expected_state_values)
+                            print(eltwise_loss)
+                            print(reward_batch)
+                            raise ValueError
+
+                    for _ in range(BATCH_NB):
+
+                        torch.cuda.empty_cache()
+
+                        batch = memory.sample()
+
+                        state_batch = torch.from_numpy(batch.state).unsqueeze(1).to(UNIT).to(device)
+                        # next_state_batch = torch.from_numpy(batch.next_state).to(UNIT).to(device)
+                        reward_batch = torch.from_numpy(batch.reward).to(UNIT).to(device)
+                        target_val = torch.from_numpy(batch.target_val).to(UNIT).to(device)
+                        old_state_vals = torch.from_numpy(batch.state_val).to(UNIT).to(device)
+                        # mask_batch = torch.from_numpy(batch.mask).to(UNIT).to(device)
+                        weights = torch.from_numpy(batch.weights).to(UNIT).to(device)
+                        state_values = policy_net(state_batch)
+
+                        next_state_values = target_val
+
+                        """ with torch.no_grad():
+
+                            a = [gen_neighborhood(next_state_batch[i],mask_batch[i],swp_idx,swp_mask,rot_mask) for i in range(BATCH_SIZE)]
+                            next_states = torch.cat(a)
+
+                            target_val = target_net(next_states.unsqueeze(1))
+                            target_val = rearrange(target_val.squeeze(-1), '(b n) -> b n ', b=BATCH_SIZE)
+                            next_state_values = torch.max(target_val, dim=1)[0] """
+
+                        expected_state_values = (next_state_values * GAMMA) + reward_batch
+
+                        criterion = nn.HuberLoss(reduction='none')
+                        eltwise_loss = criterion(state_values, expected_state_values.unsqueeze(1))
+
+                        loss = torch.mean(eltwise_loss * weights)
+
+                        optimizer.zero_grad()
+                        loss.backward()
+
+                        # gradient clipping
+                        for param in policy_net.parameters():
+                            param.grad.clamp_(-1,1)
+
+                        optimizer.step()
+
+                        # PER prio update
+                        prio_loss = eltwise_loss
+                        new_prio = prio_loss + PRIO_EPSILON
+                        memory.update_priorities(batch.indexes, new_prio.cpu().detach().numpy())
+                        
+                        if step > 500:
+                            wandb.log(
+                                {
+                                    'Train mean Q values':state_values.mean(),
+                                    'Train mean next Q values':next_state_values.mean(),
+                                    'Train mean expected Q vlaues':expected_state_values.mean(),
+                                    'Train mean reward':reward_batch.mean(),
+                                    'Train Loss':loss,
+                                }
+                            )
+
+                        # torch.cuda.empty_cache() 
+
+                        step += 1
+                        #target update
+                        if step % TARGET_UPDATE == 0:
+                            
+                            target_net.load_state_dict(policy_net.state_dict())
+                
+                        # checkpoint the policy net
+                        # if self.num_episode % (self.TARGET_UPDATE * self.TRAIN_FREQ) == 0:
+                        if step % CHECKPOINT_PERIOD == 0:
+                            torch.save(policy_net.state_dict(), f'models/checkpoint/{ENCODING}/{step // CHECKPOINT_PERIOD}.pt')
 
 
     except KeyboardInterrupt:
@@ -307,7 +298,7 @@ def train_model(hotstart:str = None):
     print(best_score)
     return 
 
-
+@torch.compile()
 def gen_neighborhood(state:Tensor, observation_mask:Tensor, swp_idx:Tensor, swp_mask:Tensor, rot_mask:Tensor):
     """
     Generate state's an observed part of the full neighborhood including ranged 2-swaps depending

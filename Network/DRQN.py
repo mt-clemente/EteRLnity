@@ -282,7 +282,8 @@ class DQN(nn.Module):
 
         conv2d1_size = 64
         conv2d2_size = 64
-        lin_size_fact = 32
+        lin_size_fact = 1
+        noisy_size = 64
 
         super(DQN, self).__init__()
         self.device = device
@@ -323,17 +324,28 @@ class DQN(nn.Module):
         
         convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w,k1),k2),k3)
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h,k1),k2),k3)
-
-        
-
         linear_input_size = convw * convh * lin_size_fact
-        noisy_size = 64
-        self.linear1 = NoisyLinear(
+
+        self.noisy_lin = NoisyLinear(
             linear_input_size,
-            outputs,
+            noisy_size,
             device=self.device,
             dtype=UNIT
             )
+        
+        self.value_stream = nn.Linear(
+            in_features=noisy_size,
+            out_features=1,
+            device=self.device,
+            dtype=UNIT
+        )
+        self.advantage_stream = nn.Linear(
+            in_features=noisy_size,
+            out_features=outputs,
+            device=self.device,
+            dtype=UNIT
+        )
+
         
 
 
@@ -343,6 +355,9 @@ class DQN(nn.Module):
         x = F.relu(self.bn1(x))
         x = F.relu(self.bn2(self.conv2d1(x)))
         x = F.relu(self.bn3(self.conv2d2(x)))
-        return self.linear1(x.view(x.size(0), -1))
+        x = self.noisy_lin(x.view(x.size(0), -1))
+        value = F.relu(self.value_stream(x))
+        advantage = F.relu(self.advantage_stream(x))
+        return   value + (advantage - advantage.mean())
 
 
