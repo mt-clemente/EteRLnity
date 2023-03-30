@@ -42,20 +42,21 @@ PARTIAL_OBSERVABILITY = 1
 BATCH_NB = 10
 CHECKPOINT_PERIOD = 2000
 BATCH_SIZE = 512
-LR = 10**-3
-TARGET_UPDATE = 1000
-MEM_SIZE = 2**16 # Has to be a power of two // use of segment trees
+LR = 2e-3
+TARGET_UPDATE = 3000
+MEM_SIZE = 2**17 # Has to be a power of two // use of segment trees
 OPT_EPSILON = 1e-6
 PRIO_EPSILON = 1e-7
 ALPHA = 0.2
 BETA = 0.9
 GAMMA = 0.975
-TRAIN_FREQ = 100
+TRAIN_FREQ = 200
 TABU_LENGTH = 0
+NOISY_STD = 1000000
 
 
 CONFIG = {
-    'swap_range':SWAP_RANGE,
+    'Noise std':NOISY_STD,
     'encoding':ENCODING,
     'unit':UNIT,
     'partial_observability':PARTIAL_OBSERVABILITY,

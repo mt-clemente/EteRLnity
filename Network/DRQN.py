@@ -4,9 +4,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from param import COLOR_ENCODING_SIZE, MAX_BSIZE, TABU_LENGTH, UNIT
+from param import COLOR_ENCODING_SIZE, MAX_BSIZE, NOISY_STD, TABU_LENGTH, UNIT
 from segment_tree import MinSegmentTree, SumSegmentTree
-from hashlib import blake2b, sha256
+from hashlib import sha256
 from pytorch_memlab import profile
 from torchrl.modules import NoisyLinear
 
@@ -22,9 +22,8 @@ class PrioritizedReplayMemory():
         self.state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
         self.next_state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
         self.rews_buf = torch.zeros(size)
-        self.target_max_val_buf = torch.zeros(size)
         self.state_val_buff = torch.zeros(size)
-        self.obs_mask_buf = torch.empty((size,neighborhood_size),dtype=bool)
+        self.final_buf = torch.empty((size),dtype=bool)
         self.max_size = size
         self.batch_size =  batch_size
         self.ptr = 0
@@ -45,17 +44,15 @@ class PrioritizedReplayMemory():
         state: torch.Tensor,
         next_state,
         reward,
-        target_max_val,
         state_val,
-        mask
+        final
     ):
 
         self.state_buf[self.ptr] = state
         self.next_state_buf[self.ptr] = next_state
         self.rews_buf[self.ptr] = reward
-        self.target_max_val_buf[self.ptr] = target_max_val
         self.state_val_buff[self.ptr] = state_val
-        self.obs_mask_buf[self.ptr] = mask
+        self.final_buf[self.ptr] = final
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
@@ -74,8 +71,7 @@ class PrioritizedReplayMemory():
         state = self.state_buf[indices]
         next_state = self.next_state_buf[indices]
         rews = self.rews_buf[indices]
-        mask = self.obs_mask_buf[indices]
-        tgt_val = self.target_max_val_buf[indices]
+        final = self.final_buf[indices]
         state_val = self.state_val_buff[indices]
         weights = np.array([self._calculate_weight(i, beta) for i in indices])
         
@@ -83,11 +79,10 @@ class PrioritizedReplayMemory():
             state,
             next_state,
             rews,
-            tgt_val,
             state_val,
-            mask,
+            final,
             weights.reshape(-1,1),
-            indices,
+            indices
         )
 
         
@@ -159,26 +154,23 @@ class PrioritizedReplayMemory():
         state_buf:torch.Tensor,
         next_state_buf:torch.Tensor,
         rew_buf:torch.Tensor,
-        tgtval_buf:torch.Tensor,
         heurval_buf:torch.Tensor,
-        mask_buf:torch.Tensor
+        final_buf:torch.Tensor
         ):
 
         state_buf = state_buf.detach().cpu()
         next_state_buf = next_state_buf.detach().cpu()
         rew_buf = rew_buf.detach().cpu()
-        tgtval_buf = tgtval_buf.detach().cpu()
         heurval_buf = heurval_buf.detach().cpu()
-        mask_buf = mask_buf.detach().cpu()
+        final_buf = final_buf.detach().cpu()
         
         for i in range(rew_buf.size()[0]):
             self.push(
                 state_buf[i],
                 next_state_buf[i],
                 rew_buf[i],
-                tgtval_buf[i],
                 heurval_buf[i],
-                mask_buf[i]
+                final_buf[i]
             )
 
 
@@ -193,9 +185,8 @@ class CPUBuffer:
         self.state_buf = torch.empty((capacity,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE))
         self.next_state_buf = torch.empty((capacity,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE))
         self.rew_buf = torch.empty((capacity))
-        self.tgtval_buf = torch.empty((capacity))
         self.heurval_buf = torch.empty((capacity))
-        self.mask_buf = torch.empty((capacity,neighborhood_size))
+        self.final_buf = torch.empty((capacity),dtype=bool)
         self.ptr = 0
 
     def push(
@@ -203,18 +194,16 @@ class CPUBuffer:
             state,
             next_state,
             reward,
-            target_val,
             heur_val,
-            mask
+            final
             ):
 
 
         self.state_buf[self.ptr] = state
         self.next_state_buf[self.ptr] = next_state
         self.rew_buf[self.ptr] = reward
-        self.tgtval_buf[self.ptr] = target_val
         self.heurval_buf[self.ptr] = heur_val
-        self.mask_buf[self.ptr] = mask
+        self.final_buf[self.ptr] = final
 
         self.ptr += 1
         if self.ptr == self.capacity:
@@ -226,9 +215,8 @@ class CPUBuffer:
             self.state_buf,
             self.next_state_buf,
             self.rew_buf,
-            self.tgtval_buf,
             self.heurval_buf,
-            self.mask_buf,
+            self.final_buf,
         )
         
 
@@ -258,7 +246,7 @@ class TabuList():
         key = sha256(state.cpu().numpy()).hexdigest()
         return key in self.tabu.keys()
     
-    def update(self,step:int):
+    def filter(self,step:int):
         self.tabu = {k:v for k,v in self.tabu.items() if v > step}
 
     def get_update(self,batch:torch.Tensor,step:int):
@@ -275,7 +263,6 @@ class TabuList():
             
         return None,None
 
-
     def fast_foward(self):
         vals = self.tabu.values()
         m = min(vals)
@@ -284,6 +271,47 @@ class TabuList():
             self.tabu[k] -= m
         
 
+class StoppingCriterion():
+
+    def __init__(self,threshold) -> None:
+        """
+        Stopping critirion for a trajectory.
+        Internal counter is updated each step :
+         * \+ 1 if degrading move
+         * \- 0.5 if the new score is better than the previous one
+         * Reset to 0 if new best score
+        """
+        self.counter = 0
+        self.prev_score = 0
+        self.eos = False
+        self.threshold = threshold
+
+
+    def update(self,score,best_score):
+
+        if score > best_score:
+            self.counter = 0
+
+        elif score > self.prev_score:
+            self.counter -= 0.5
+
+        else:
+            self.counter += 1
+
+        self.prev_score = score
+
+        if self.counter > self.threshold:
+            self.eos = True
+
+    def is_stale(self):
+        return self.eos
+        
+    
+    def reset(self):
+        self.counter = 0
+        self.prev_score = 0
+        self.eos = False
+
 
         
 # Neural Network used in our model
@@ -291,7 +319,7 @@ class DQN(nn.Module):
 
     def __init__(self, h, w, outputs, device, encoding_size):
 
-        k1 = 3
+        k1 = 2
         k2 = 3
         k3 = 2
 
@@ -341,27 +369,19 @@ class DQN(nn.Module):
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h,k1),k2),k3)
         linear_input_size = convw * convh * lin_size_fact
 
-        self.noisy_lin = NoisyLinear(
-            linear_input_size,
-            noisy_size,
-            device=self.device,
-            dtype=UNIT
-            )
-        
         self.value_stream = nn.Linear(
-            in_features=noisy_size,
+            in_features=linear_input_size,
             out_features=1,
             device=self.device,
             dtype=UNIT
         )
         self.advantage_stream = nn.Linear(
-            in_features=noisy_size,
+            in_features=linear_input_size,
             out_features=outputs,
             device=self.device,
             dtype=UNIT
         )
 
-        
 
 
     def forward(self, x:torch.Tensor):
@@ -370,9 +390,8 @@ class DQN(nn.Module):
         x = F.relu(self.bn1(x))
         x = F.relu(self.bn2(self.conv2d1(x)))
         x = F.relu(self.bn3(self.conv2d2(x)))
-        x = self.noisy_lin(x.view(x.size(0), -1))
-        value = F.relu(self.value_stream(x))
-        advantage = F.relu(self.advantage_stream(x))
+        value = self.value_stream(x.view(x.size(0), -1))
+        advantage = self.advantage_stream(x.view(x.size(0), -1))
         return   value + (advantage - advantage.mean())
 
 

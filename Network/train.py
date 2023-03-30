@@ -1,5 +1,4 @@
 from collections import namedtuple
-import sys
 
 from einops import repeat, rearrange
 import torch
@@ -10,7 +9,6 @@ from pytorch_memlab import MemReporter
 from utils import *
 from param import *
 import wandb
-import torchrl
 
 
 
@@ -38,11 +36,10 @@ def train_model(hotstart:str = None):
                                      ('state',
                                       'next_state',
                                       'reward',
-                                      'target_val',
                                       'state_val',
-                                      'mask',
+                                      'final',
                                       'weights',
-                                      'indexes'
+                                      'indices'
                                       )
                                       )
 
@@ -56,6 +53,8 @@ def train_model(hotstart:str = None):
     else:
         policy_net = DQN(MAX_BSIZE + 2, MAX_BSIZE + 2, action_nb, device, COLOR_ENCODING_SIZE)
     
+    policy_net.train()
+
     target_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, action_nb, device, COLOR_ENCODING_SIZE).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
@@ -74,6 +73,7 @@ def train_model(hotstart:str = None):
     swp_mask, rot_mask = gen_masks(MAX_BSIZE,swp_idx)
     neighborhood_size = swp_idx.size()[0] + rot_mask.size()[0]
     
+
     memory = PrioritizedReplayMemory(
         size=MEM_SIZE,
         Transition=Transition,
@@ -91,6 +91,7 @@ def train_model(hotstart:str = None):
     )
 
     tabu = TabuList(TABU_LENGTH)
+    stopping_crit = StoppingCriterion(5000)
 
     obs_neighborhood_size = int(PARTIAL_OBSERVABILITY * neighborhood_size)
     observation_mask = (torch.cat((torch.ones(obs_neighborhood_size),torch.zeros(neighborhood_size - obs_neighborhood_size))) == 1)
@@ -105,32 +106,42 @@ def train_model(hotstart:str = None):
     pz = EternityPuzzle(args.instance)
     pz.display_solution(to_list(state,bsize),"start.png")
 
-
+    temp = state.clone()
     print("start")
+
+    best_score = 0
+    best_state = state
+    episode = 0
 
     try:
         
         while 1:
 
-            """ state, bsize = initialize_sol(args.instance)
+            state, bsize = initialize_sol(args.instance)
             state = state.to(dtype=UNIT)
- """
+            state = scramlbe(state,rot_mask)
+
+            """
+            TODO: IRLS
+            """
             move_buffer.state = state
             move_buffer.reward = 0
             move_buffer.state_val = 0
-            best_score = 0
-            _, prev_state_score = eval_sol(state,bsize,best_score)
+            episode_best_score = 0
+            episode_best_state = state
+            _, prev_state_score = eval_sol(state,bsize,episode_best_score)
+            episode_end = False
+            print(f"NEW EPISODE : - {episode:>5}")
+            score = 0
+            while not episode_end:
 
-            while 1:
+                if step % 1 == 0:
+                    print(f"{step} - {score}",end='\r')
 
-                if step % 10 == 0:
-                    print(step)
-
-                tabu.update(step)
+                tabu.filter(step)
 
                 with torch.no_grad():
                     heur_val = policy_net(state.unsqueeze(0).unsqueeze(0)).squeeze(0)
-                    target_heur_val = target_net(state.unsqueeze(0).unsqueeze(0)).max()
 
                 best_move_idxs= torch.topk(heur_val,TABU_LENGTH + 1).indices
                 new_state = None
@@ -150,15 +161,18 @@ def train_model(hotstart:str = None):
                     new_state = gen_neighbor(state,best_move_idxs,swp_idx,swp_mask,rot_mask)
                     new_idx = best_move_idxs
 
+                print(new_idx)
 
                 #reward
-                new_state_val, score = eval_sol(new_state,bsize,best_score)
+                new_state_val, score = eval_sol(new_state,bsize,episode_best_score)
 
                 if torch.all(new_state == state):
                     reward = - 2
+                    raise OSError
                 
                 else:
-                    reward =  new_state_val + max(score - prev_state_score,0)
+                    reward =  new_state_val + 2 * max(score - prev_state_score,0) + min(score - prev_state_score,0)
+
 
                 """ if torch.all(new_state == state):
                     pass #raise OSError
@@ -168,19 +182,42 @@ def train_model(hotstart:str = None):
                     raise OSError
                 """
                 
-                if score > best_score:
-                    pz.display_solution(to_list(new_state,bsize),f'best_sol_{score}')
-                    best_score = score
-                    
+                if score > episode_best_score:
+                    print(f"Ep {episode:>7} - score : {score}")
+                    episode_best_score = score
+                    episode_best_state = state                    
+
+                stopping_crit.update(score,episode_best_score)
+
+
 
                 cpu_buf.push(
                     move_buffer.state,
                     state,
                     move_buffer.reward,
-                    target_heur_val,
                     move_buffer.state_val,
-                    observation_mask
+                    final=False
                 )
+
+
+                # end on either max score or trajectory does not lead to anything
+                if ((bsize + 1) * bsize * 2 - score) == 0 or stopping_crit.is_stale():
+                    if stopping_crit.is_stale():
+                        print("STALE")
+                    else:
+                        print("FOUND SOLUTION!")
+
+                    episode += 1
+                    episode_end = True
+                    stopping_crit.reset()
+                    cpu_buf.push(
+                        state,
+                        torch.zeros_like(state),
+                        reward,
+                        heur_val[new_idx],
+                        final=True
+                    )
+
 
                 
                 prev_state_score = score
@@ -200,8 +237,8 @@ def train_model(hotstart:str = None):
                     {   
                         'Relative policy entropy': policy_entropy/max_entropy,
                         'Q values':heur_val[new_idx],
-                        'Max next Q vlaues':target_heur_val,
                         'reward':reward,
+                        'Episode':episode
                     }
                 )
                 # -------------------- MODEL OPTIMIZATION --------------------
@@ -210,8 +247,6 @@ def train_model(hotstart:str = None):
                 if len(memory) >= BATCH_SIZE and step % TRAIN_FREQ == 0:
 
                     
-                    print((policy_entropy/max_entropy).squeeze(-1))
-                
                     if random.random() > 1 - 10e-5:
                         ok = pz.verify_solution(to_list(state,bsize))
 
@@ -246,12 +281,16 @@ def train_model(hotstart:str = None):
                     torch.save(policy_net.state_dict(), f'models/checkpoint/{ENCODING}/{step // CHECKPOINT_PERIOD}.pt')
 
 
+            if episode_best_score > best_score:
+                best_score = episode_best_score
+                best_state = episode_best_state
+
     except KeyboardInterrupt:
         pass
 
     # reporter = MemReporter()
     # reporter.report()
-    print("STILL VALID :",pz.verify_solution(to_list(state,bsize)))
+    print("STILL VALID :",pz.verify_solution(to_list(best_state,bsize)))
     print(best_score)
     return 
 
@@ -274,18 +313,21 @@ def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQ
         state_batch = batch.state.unsqueeze(1).to(UNIT).to(device)
         next_state_batch = batch.next_state.unsqueeze(1).to(UNIT).to(device)
         reward_batch = batch.reward.to(UNIT).to(device)
-        target_val = batch.target_val.to(UNIT).to(device)
+        final_mask = batch.final.to(device)
+        not_final_mask = torch.logical_not(final_mask)
         old_state_vals = batch.state_val.to(UNIT).to(device)
         weights = torch.from_numpy(batch.weights).to(UNIT).to(device)
-
 
         state_values = policy_net(state_batch).max(dim=-1).values
 
         with torch.no_grad():
-            next_state_values = target_net(next_state_batch).max(dim=-1).values
+            next_state_values = target_net(next_state_batch[not_final_mask]).max(dim=-1).values
 
 
-        expected_state_values = (next_state_values * GAMMA) + reward_batch
+        expected_state_values = torch.zeros_like(state_values)
+
+        expected_state_values[not_final_mask] = (next_state_values* GAMMA) + reward_batch[not_final_mask]
+        expected_state_values[final_mask] = reward_batch[final_mask]
 
         criterion = nn.HuberLoss(reduction='none')
         eltwise_loss = criterion(state_values, expected_state_values)
@@ -304,10 +346,14 @@ def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQ
         # PER prio update
         prio_loss = eltwise_loss
         new_prio = prio_loss + PRIO_EPSILON
-        memory.update_priorities(batch.indexes, new_prio.cpu().detach().numpy())
+        memory.update_priorities(batch.indices, new_prio.cpu().detach().numpy())
 
+        with torch.no_grad():
+            log_prob = torch.log(torch.softmax(state_values,-1))
+            old_log_prob = torch.log(torch.softmax(old_state_vals,-1))
         wandb.log(
             {
+                'KL div': torch.nn.functional.kl_div(log_prob,old_log_prob,reduction='batchmean',log_target=True),
                 'Train mean Q values':state_values.mean(),
                 'Train mean next Q values':next_state_values.mean(),
                 'Train mean expected Q vlaues':expected_state_values.mean(),
@@ -325,8 +371,8 @@ def gen_neighbor(state:Tensor, idx:int, swp_idx:Tensor, swp_mask:Tensor, rot_mas
     """
     Generate one neighbor
     """
-    if False and idx >= swp_idx.size()[0]:
-        idx = swp_idx.size()[0]
+    if idx >= swp_idx.size()[0]:
+        idx = swp_idx.size()[0] + random.randint(0,rot_mask.size()[0]-1)
         neighbor = rotate_elements(state,rot_mask[idx-swp_idx.size()[0]])
 
     else:
@@ -387,8 +433,6 @@ def rotate_elements(state:Tensor, rot_mask:Tensor, idx:int=0):
 
         rolled = torch.where(rot_mask,rolled,state)
 
-        print("rolled")
-
     else:
 
         state_batch = repeat(state, 'i j c -> k i j c',k=rot_mask.size()[0])
@@ -403,8 +447,16 @@ def rotate_elements(state:Tensor, rot_mask:Tensor, idx:int=0):
 
     return rolled
     
+def scramlbe(state:torch.Tensor, rot_mask:torch.Tensor, n_rounds:int = 2000):
 
+    for _ in range(n_rounds):
+        
+        k = random.randint(0,rot_mask.size()[0]-1)
+        d = random.randint(1,4)
 
+        state = rotate_elements(state,rot_mask[k],d)
+
+    return state
 
 def swap_elements(state:Tensor, swp_idx:Tensor, swp_mask:Tensor) -> Tensor:
     """
@@ -484,9 +536,9 @@ def eval_sol(state:Tensor, bsize:int,best_score:int) -> int:
     max_connections = (bsize + 1) * bsize * 2
 
     if total_connections == max_connections:
-        return 100, total_connections
+        return 50, total_connections
 
-    return (total_connections - best_score) / (max_connections - total_connections + 1), total_connections
+    return (total_connections - max_connections) / (max_connections), total_connections
 
 
 
@@ -495,18 +547,16 @@ def eval_sol(state:Tensor, bsize:int,best_score:int) -> int:
 
 if __name__ == "__main__"  and '__file__' in globals():
 
+    args = parse_arguments()
+    CONFIG['Instance'] = args.instance.replace('instances/','')
 
-    if '-nw' in sys.argv:
-        train_model()
+    wandb.init(
+        project='Eternity II',
+        config=CONFIG
+    )
 
-    else:
-        wandb.init(
-            project='Eternity II',
-            config=CONFIG
-        )
+    train_model()
 
-        train_model()
-
-        wandb.finish()
+    wandb.finish()
 
 

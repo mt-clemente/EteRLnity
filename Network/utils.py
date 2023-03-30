@@ -4,16 +4,10 @@ import sys
 import torch
 from torch import Tensor
 from einops import rearrange, repeat
-from eternity_puzzle import EternityPuzzle
+from eternity import EternityPuzzle
 from param import *
 
-
-import matplotlib
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
-from matplotlib.path import Path
-from matplotlib.lines import Line2D
-import numpy as np
+from init_solver import init_boost_conflicts
 
 
 # -------------------- UTILS --------------------
@@ -28,13 +22,20 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def initialize_sol(instance_file:str):
+def initialize_sol(instance_file:str, boost_conflicts:bool=True):
 
     pz = EternityPuzzle(instance_file)
-    random.shuffle(pz.piece_list)    
-    tens = to_tensor(pz.piece_list.copy(),ENCODING)
+    random.shuffle(pz.piece_list)
+
+    if boost_conflicts:
+        sol,_ = init_boost_conflicts(pz)
+        tens = to_tensor(sol)
+    else:
+        tens = to_tensor(pz.piece_list.copy(),ENCODING)
 
     return tens, pz.board_size
+
+
 
 def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
     """
@@ -323,3 +324,10 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
                 list_sol.append(tuple(temp))
 
     return list_sol
+
+
+def end_state():
+    
+    
+
+    return

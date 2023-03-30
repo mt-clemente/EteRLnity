@@ -6,7 +6,6 @@ import sys
 from einops import repeat, rearrange
 from eternity_puzzle import EternityPuzzle
 import torch
-from DRQN2 import *
 from solver_random import solve_random
 from math import ceil, comb
 

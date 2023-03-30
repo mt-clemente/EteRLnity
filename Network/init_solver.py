@@ -1,6 +1,6 @@
 import copy
 import numpy as np
-from eternity_puzzle import EternityPuzzle
+from eternity import EternityPuzzle
 
 GRAY = 0
 BLACK = 23
@@ -12,7 +12,7 @@ SOUTH = 1
 WEST = 2
 EAST = 3
 
-def solve_heuristic(eternity_puzzle:EternityPuzzle):
+def init_boost_conflicts(eternity_puzzle:EternityPuzzle):
     """
     Heuristic solution of the problem
     :param eternity_puzzle: object describing the input
@@ -103,11 +103,11 @@ def choose_piece(i,j,solution,pieces,puzzle:EternityPuzzle):
 
         scores.append(len(adjacent_colors.intersection(set(p))))
 
-    best = np.argmin(scores)
-    if isinstance(best,np.ndarray):
-        p = pieces[best[0]]
+    worst = np.argmin(scores)
+    if isinstance(worst,np.ndarray):
+        p = pieces[worst[0]]
     else:
-        p = pieces[best]
+        p = pieces[worst]
 
     return p
 
