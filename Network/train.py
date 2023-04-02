@@ -11,7 +11,6 @@ from param import *
 import wandb
 
 
-
 def train_model(hotstart:str = None):
 
     """
@@ -20,11 +19,24 @@ def train_model(hotstart:str = None):
     :return: a tuple (solution, cost) where solution is a list of the pieces (rotations applied) and
         cost is the cost of the solution
     """
+    args = parse_arguments()
+    hotstart = args.hotstart
+    
+    # -------------------- GAME INIT --------------------
+
+    state, bsize = initialize_sol(args.instance)
+    
+    state = state.to(dtype=UNIT)
+
+    swp_idx = gen_swp_idx(MAX_BSIZE)
+    swp_mask, rot_mask = gen_masks(MAX_BSIZE,swp_idx)
+    neighborhood_size = swp_idx.size()[0] + rot_mask.size()[0]
+
+    print(neighborhood_size)
+
 
     # -------------------- NETWORK INIT -------------------- 
 
-    args = parse_arguments()
-    hotstart = args.hotstart
     # torch.cuda.is_available = lambda : False
     if torch.cuda.is_available():
         device = 'cuda'
@@ -36,6 +48,7 @@ def train_model(hotstart:str = None):
                                      ('state',
                                       'next_state',
                                       'reward',
+                                      'action',
                                       'state_val',
                                       'final',
                                       'weights',
@@ -44,34 +57,23 @@ def train_model(hotstart:str = None):
                                       )
 
 
-    action_nb = comb((MAX_BSIZE-2)**2,2) + comb(4*(MAX_BSIZE-2),2) + comb(4,2) + MAX_BSIZE ** 2 * 3
-
 
     if hotstart:
-        policy_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, action_nb, device,COLOR_ENCODING_SIZE)
+        policy_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, neighborhood_size, device,COLOR_ENCODING_SIZE)
         policy_net.load_state_dict(torch.load(hotstart))
     else:
-        policy_net = DQN(MAX_BSIZE + 2, MAX_BSIZE + 2, action_nb, device, COLOR_ENCODING_SIZE)
+        policy_net = DQN(MAX_BSIZE + 2, MAX_BSIZE + 2, neighborhood_size, device, COLOR_ENCODING_SIZE)
     
     policy_net.train()
 
-    target_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, action_nb, device, COLOR_ENCODING_SIZE).to(device)
+    target_net = DQN(MAX_BSIZE+2, MAX_BSIZE+2, neighborhood_size, device, COLOR_ENCODING_SIZE).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
-    optimizer = torch.optim.Adam(policy_net.parameters(),lr = LR,eps=1e-6)
+    optimizer = torch.optim.RMSprop(policy_net.parameters(),lr = LR,eps=1e-6)
 
     move_buffer = MoveBuffer()
     
-    # -------------------- GAME INIT --------------------
-
-    state, bsize = initialize_sol(args.instance)
-    
-    state = state.to(dtype=UNIT)
-
-    swp_idx = gen_swp_idx(MAX_BSIZE)
-    swp_mask, rot_mask = gen_masks(MAX_BSIZE,swp_idx)
-    neighborhood_size = swp_idx.size()[0] + rot_mask.size()[0]
     
 
     memory = PrioritizedReplayMemory(
@@ -91,10 +93,9 @@ def train_model(hotstart:str = None):
     )
 
     tabu = TabuList(TABU_LENGTH)
-    stopping_crit = StoppingCriterion(5000)
+    stopping_crit = StoppingCriterion(10000)
 
     obs_neighborhood_size = int(PARTIAL_OBSERVABILITY * neighborhood_size)
-    observation_mask = (torch.cat((torch.ones(obs_neighborhood_size),torch.zeros(neighborhood_size - obs_neighborhood_size))) == 1)
 
     max_entropy = torch.log2(torch.tensor(obs_neighborhood_size))
 
@@ -106,7 +107,7 @@ def train_model(hotstart:str = None):
     pz = EternityPuzzle(args.instance)
     pz.display_solution(to_list(state,bsize),"start.png")
 
-    temp = state.clone()
+    temp = INIT_TEMP
     print("start")
 
     best_score = 0
@@ -126,6 +127,7 @@ def train_model(hotstart:str = None):
             """
             move_buffer.state = state
             move_buffer.reward = 0
+            move_buffer.action = 0
             move_buffer.state_val = 0
             episode_best_score = 0
             episode_best_state = state
@@ -133,6 +135,8 @@ def train_model(hotstart:str = None):
             episode_end = False
             print(f"NEW EPISODE : - {episode:>5}")
             score = 0
+            ep_reward = 0
+            ep_start = step
             while not episode_end:
 
                 if step % 1 == 0:
@@ -143,7 +147,14 @@ def train_model(hotstart:str = None):
                 with torch.no_grad():
                     heur_val = policy_net(state.unsqueeze(0).unsqueeze(0)).squeeze(0)
 
-                best_move_idxs= torch.topk(heur_val,TABU_LENGTH + 1).indices
+
+                if random.random() < temp / MAX_TEMP:
+                    best_move_idxs = torch.randint(0,neighborhood_size,(1,))
+                else:
+                    # probs = torch.softmax(heur_val/(temp * heur_val.max()),-1)
+                    # best_move_idxs = torch.multinomial(probs,TABU_LENGTH + 1)
+                    best_move_idxs= torch.topk(heur_val,TABU_LENGTH + 1).indices
+
                 new_state = None
 
                 best_neighbors = gen_neighborhood(state,best_move_idxs,swp_idx,swp_mask,rot_mask)
@@ -161,7 +172,6 @@ def train_model(hotstart:str = None):
                     new_state = gen_neighbor(state,best_move_idxs,swp_idx,swp_mask,rot_mask)
                     new_idx = best_move_idxs
 
-                print(new_idx)
 
                 #reward
                 new_state_val, score = eval_sol(new_state,bsize,episode_best_score)
@@ -173,6 +183,7 @@ def train_model(hotstart:str = None):
                 else:
                     reward =  new_state_val + 2 * max(score - prev_state_score,0) + min(score - prev_state_score,0)
 
+                ep_reward += reward
 
                 """ if torch.all(new_state == state):
                     pass #raise OSError
@@ -195,6 +206,7 @@ def train_model(hotstart:str = None):
                     move_buffer.state,
                     state,
                     move_buffer.reward,
+                    move_buffer.action,
                     move_buffer.state_val,
                     final=False
                 )
@@ -214,30 +226,41 @@ def train_model(hotstart:str = None):
                         state,
                         torch.zeros_like(state),
                         reward,
+                        new_idx,
                         heur_val[new_idx],
                         final=True
                     )
+                    wandb.log({"Mean episode reward":ep_reward/(step - ep_start + 1e-5)})
 
 
                 
                 prev_state_score = score
                 move_buffer.state = state
                 move_buffer.reward = reward
+                move_buffer.action = new_idx
                 move_buffer.state_val = heur_val[new_idx]
 
 
                 wandb.log({'Score':score})
                 state = new_state
-
                 with torch.no_grad():
-                    policy_prob = torch.softmax(heur_val,dim=0).squeeze(-1)
+                    policy_prob = torch.softmax(heur_val,dim=-1).squeeze(-1)
+                    policy_prob = policy_prob[policy_prob != 0]
                     policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
+
+                if step % 10:
+                    # nt = temp * (0.3 + policy_entropy/max_entropy)**(1/10000)
+                    nt = temp * TEMP_FACT
+                    temp = min(MAX_TEMP, nt)
+                    temp = max(MIN_TEMP, nt)
+              
 
                 wandb.log(
                     {   
                         'Relative policy entropy': policy_entropy/max_entropy,
                         'Q values':heur_val[new_idx],
-                        'reward':reward,
+                        'Reward':reward,
+                        'Temp':temp,
                         'Episode':episode
                     }
                 )
@@ -288,7 +311,7 @@ def train_model(hotstart:str = None):
     except KeyboardInterrupt:
         pass
 
-    # reporter = MemReporter()
+    # reporter = MemReporter(policy_net)
     # reporter.report()
     print("STILL VALID :",pz.verify_solution(to_list(best_state,bsize)))
     print(best_score)
@@ -313,12 +336,53 @@ def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQ
         state_batch = batch.state.unsqueeze(1).to(UNIT).to(device)
         next_state_batch = batch.next_state.unsqueeze(1).to(UNIT).to(device)
         reward_batch = batch.reward.to(UNIT).to(device)
+        action_batch = batch.action.to(device)
         final_mask = batch.final.to(device)
         not_final_mask = torch.logical_not(final_mask)
         old_state_vals = batch.state_val.to(UNIT).to(device)
         weights = torch.from_numpy(batch.weights).to(UNIT).to(device)
 
-        state_values = policy_net(state_batch).max(dim=-1).values
+
+
+
+
+
+        with torch.no_grad():
+            next_action = target_net(next_state_batch).argmax(1)
+            next_dist = target_net.dist(next_state_batch)
+            next_dist = next_dist[range(BATCH_SIZE), next_action]
+
+            t_z = reward_batch.unsqueeze(1) + not_final_mask.int().unsqueeze(1) * GAMMA * target_net.support.unsqueeze(0) # FIXME: Support
+            t_z = t_z.clamp(min=MIN_REWARD, max=MAX_REWARD)
+            delta_z = (MAX_REWARD - MIN_REWARD) / (ATOMS - 1)
+            b = (t_z - MIN_REWARD) / delta_z
+            l = b.floor().long()
+            u = b.ceil().long()
+
+            offset = (
+                torch.linspace(
+                    0, (BATCH_SIZE - 1) * ATOMS, BATCH_SIZE
+                ).long()
+                .unsqueeze(1)
+                .expand(BATCH_SIZE, ATOMS)
+                .to(device)
+            )
+
+            proj_dist = torch.zeros(next_dist.size(), device=device)
+            proj_dist.view(-1).index_add_(
+                0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1)
+            )
+            proj_dist.view(-1).index_add_(
+                0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1)
+            )
+
+        dist = policy_net.dist(state_batch)
+        log_p = torch.log(dist[range(BATCH_SIZE), action_batch])
+
+        eltwise_loss = -(proj_dist * log_p).sum(1)
+        loss = eltwise_loss.mean()
+
+        """ state_values = policy_net(state_batch).max(dim=-1).values
 
         with torch.no_grad():
             next_state_values = target_net(next_state_batch[not_final_mask]).max(dim=-1).values
@@ -333,7 +397,7 @@ def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQ
         eltwise_loss = criterion(state_values, expected_state_values)
 
         loss = torch.mean(eltwise_loss * weights)
-
+ """
         optimizer.zero_grad()
         loss.backward()
 
@@ -348,9 +412,12 @@ def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQ
         new_prio = prio_loss + PRIO_EPSILON
         memory.update_priorities(batch.indices, new_prio.cpu().detach().numpy())
 
-        with torch.no_grad():
-            log_prob = torch.log(torch.softmax(state_values,-1))
-            old_log_prob = torch.log(torch.softmax(old_state_vals,-1))
+        """ with torch.no_grad():
+            log_prob = torch.log(torch.softmax(state_values,-1)+1e-5)
+            log_prob[log_prob == -torch.inf] = 0
+            old_log_prob = torch.log(torch.softmax(old_state_vals,-1)+1e-5)
+            old_log_prob[old_log_prob == -torch.inf] = 0
+
         wandb.log(
             {
                 'KL div': torch.nn.functional.kl_div(log_prob,old_log_prob,reduction='batchmean',log_target=True),
@@ -360,9 +427,15 @@ def optimize_model(memory:PrioritizedReplayMemory, policy_net:DQN, target_net:DQ
                 'Train mean reward':reward_batch.mean(),
                 'Train Loss':loss,
             }
+        ) """
+
+        wandb.log(
+            {
+                'Train mean reward':reward_batch.mean(),
+                'Train Loss':loss,
+            }
         )
-
-
+ 
 
 
 
@@ -536,7 +609,7 @@ def eval_sol(state:Tensor, bsize:int,best_score:int) -> int:
     max_connections = (bsize + 1) * bsize * 2
 
     if total_connections == max_connections:
-        return 50, total_connections
+        return 10, total_connections
 
     return (total_connections - max_connections) / (max_connections), total_connections
 

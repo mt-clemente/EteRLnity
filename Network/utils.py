@@ -326,8 +326,5 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
     return list_sol
 
 
-def end_state():
-    
-    
-
-    return
+def soft_lj(x):
+    return ((1/x)**2- 2 *(1/x)) + 1.5

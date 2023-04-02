@@ -24,8 +24,19 @@ WHITE = 25
 N_COLORS = 23
 
 
+# -------------------- NETWORK SETTINGS -------------------- 
+
+DIM_CONV3D = 256
+KER3D = 2
+DIM_CONV2D1 = 64
+KER2D1 = 2
+DIM_CONV2D2 = 32
+KER2D2 = 3
+DIM_LIN = 32
+
 # -------------------- TRAINING SETTINGS -------------------- 
 UNIT = torch.float
+SWAP_RANGE = 2
 
 ENCODING = 'binary'
 
@@ -39,24 +50,29 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 PARTIAL_OBSERVABILITY = 1
-BATCH_NB = 10
-CHECKPOINT_PERIOD = 2000
-BATCH_SIZE = 512
-LR = 2e-3
-TARGET_UPDATE = 3000
+BATCH_NB = 20
+CHECKPOINT_PERIOD = 100000
+BATCH_SIZE = 128
+LR = 5e-4
+TARGET_UPDATE = 10000
 MEM_SIZE = 2**17 # Has to be a power of two // use of segment trees
 OPT_EPSILON = 1e-6
 PRIO_EPSILON = 1e-7
-ALPHA = 0.2
+ALPHA = 0.4
 BETA = 0.9
 GAMMA = 0.975
-TRAIN_FREQ = 200
+TRAIN_FREQ = 800
 TABU_LENGTH = 0
-NOISY_STD = 1000000
-
+MAX_REWARD = 10
+MIN_REWARD = -5
+ATOMS = 10
+INIT_TEMP = 1000
+TEMP_FACT = 1 - 5e-6
+MIN_TEMP = 1
+MAX_TEMP = 1000
 
 CONFIG = {
-    'Noise std':NOISY_STD,
+    'Initial temperature':INIT_TEMP,
     'encoding':ENCODING,
     'unit':UNIT,
     'partial_observability':PARTIAL_OBSERVABILITY,
@@ -69,5 +85,10 @@ CONFIG = {
     'Beta':BETA,
     'Gamma':GAMMA,
     'Train frequence':TRAIN_FREQ,
-    'Tabu length': TABU_LENGTH
+    'Dim conv3d':DIM_CONV3D,
+    'Size ker3d':KER3D,
+    'Dim conv2d1':DIM_CONV2D1,
+    'Size ker2d1':KER2D1,
+    'Dim conv2d2':DIM_CONV2D2,
+    'Size ker2d2':KER2D2,
 }
