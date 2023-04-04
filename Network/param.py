@@ -9,9 +9,10 @@ PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
 # global 2-swap gives a size 32640 neighborhood which can be too much
 # for the GPU. Capping the swapping range helps reduce the neighborhood
 # without losing connectivity.
-SWAP_RANGE = 40
+SWAP_RANGE = 2
 
 MAX_BSIZE = 16
+PADDED_SIZE = MAX_BSIZE + 2 * (SWAP_RANGE)
 NORTH = 0
 SOUTH = 1
 WEST = 2
@@ -36,9 +37,8 @@ DIM_LIN = 32
 
 # -------------------- TRAINING SETTINGS -------------------- 
 UNIT = torch.float
-SWAP_RANGE = 2
 
-ENCODING = 'binary'
+ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
     COLOR_ENCODING_SIZE = ceil(log2(N_COLORS))
@@ -49,12 +49,12 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-PARTIAL_OBSERVABILITY = 1
-BATCH_NB = 20
+BATCH_NB = 10
 CHECKPOINT_PERIOD = 100000
-BATCH_SIZE = 128
-LR = 5e-4
-TARGET_UPDATE = 10000
+BATCH_SIZE = 512
+META_LR = 5e-7
+ACT_LR = 5e-6
+TARGET_UPDATE = 4000
 MEM_SIZE = 2**17 # Has to be a power of two // use of segment trees
 OPT_EPSILON = 1e-6
 PRIO_EPSILON = 1e-7
@@ -63,21 +63,13 @@ BETA = 0.9
 GAMMA = 0.975
 TRAIN_FREQ = 800
 TABU_LENGTH = 0
-MAX_REWARD = 10
-MIN_REWARD = -5
-ATOMS = 10
-INIT_TEMP = 1000
-TEMP_FACT = 1 - 5e-6
-MIN_TEMP = 1
-MAX_TEMP = 1000
 
 CONFIG = {
-    'Initial temperature':INIT_TEMP,
     'encoding':ENCODING,
     'unit':UNIT,
-    'partial_observability':PARTIAL_OBSERVABILITY,
     'Batch size':BATCH_SIZE,
-    'Learning rate':LR,
+    'Meta learning rate':META_LR,
+    'Actuator learning rate':ACT_LR,
     'Target update':TARGET_UPDATE,
     'Replay size':MEM_SIZE,
     'Prio epsilon':PRIO_EPSILON,

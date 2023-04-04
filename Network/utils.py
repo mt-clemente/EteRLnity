@@ -29,10 +29,9 @@ def initialize_sol(instance_file:str, boost_conflicts:bool=True):
 
     if boost_conflicts:
         sol,_ = init_boost_conflicts(pz)
-        tens = to_tensor(sol)
+        tens = to_tensor(sol,ENCODING)
     else:
         tens = to_tensor(pz.piece_list.copy(),ENCODING)
-
     return tens, pz.board_size
 
 
@@ -42,8 +41,6 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
     Generates the swap indexes for every 2-swap available.
     For efficiency, the borders (tiles containing grey) can only be swapped
     on the border
-
-    output shape : [batch_size, 2, 2] 
 
     """
 
@@ -78,7 +75,7 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
             on_corner2 = (i2,j2) in corners
             
             if on_corner1 != on_corner2:
-                continue
+                pass # continue
 
             swp_idx.append([[i1,j1],[i2,j2]])
             k += 1
@@ -86,20 +83,19 @@ def gen_swp_idx(size:int, no_offset:bool = False) -> Tensor:
     # the board does not cover the whole state, we only swap playable tiles
     
 
-    offset = (MAX_BSIZE + 2 - size) // 2
+    offset = (PADDED_SIZE - size) // 2
 
     return swp_idx + offset
 
 def gen_masks(size, swp_idx):
     """
     Generates masks according to the given indexes.
-    FIXME:
     Where the first dimension represents the first or second element swapped.
     """
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    swp_mask_batch = torch.zeros(swp_idx.shape[0], MAX_BSIZE + 2, MAX_BSIZE + 2, 4 * COLOR_ENCODING_SIZE ,2, dtype=torch.bool,device=device)
+    swp_mask_batch = torch.zeros(swp_idx.shape[0], PADDED_SIZE, PADDED_SIZE, 4 * COLOR_ENCODING_SIZE ,2, dtype=torch.bool,device=device)
 
     i = swp_idx[:,0]
     j = swp_idx[:,1]
@@ -109,9 +105,9 @@ def gen_masks(size, swp_idx):
 
     swp_mask_batch = rearrange(swp_mask_batch,'b i j c k -> k b i j c',k=2) == 1
 
-    rot_mask_batch  = torch.zeros((3 * size**2 ,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE),device=device)
+    rot_mask_batch  = torch.zeros((3 * size**2 ,PADDED_SIZE,PADDED_SIZE,4*COLOR_ENCODING_SIZE),device=device)
 
-    offset = (MAX_BSIZE + 2 - size) // 2
+    offset = (PADDED_SIZE - size) // 2
     for i in range(offset, offset + size):
         for j in range(offset, offset + size):
             for dir in range(3):
@@ -174,20 +170,20 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
 
     if encoding == 'binary':
         color_enc_size = ceil(torch.log2(torch.tensor(N_COLORS)))
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         # Tiles around the board
         # To make sure the policy learns that the gray tiles are always one the border,
         # the reward for connecting to those tiles is bigger.
-        tens[0,:,color_enc_size:2*color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[:,0,2*color_enc_size:color_enc_size*3] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[MAX_BSIZE+1,:,:color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[:,MAX_BSIZE+1,3*color_enc_size:] = binary(torch.tensor(GRAY),color_enc_size)
+        tens[0:SWAP_RANGE+1,:,color_enc_size:2*color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
+        tens[:,0:SWAP_RANGE+1,2*color_enc_size:color_enc_size*3] = binary(torch.tensor(GRAY),color_enc_size)
+        tens[SWAP_RANGE + MAX_BSIZE+1:,:,:color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
+        tens[:,SWAP_RANGE + MAX_BSIZE+1:,3*color_enc_size:] = binary(torch.tensor(GRAY),color_enc_size)
 
 
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE + 2 - b_size) // 2
+        offset = (PADDED_SIZE - b_size) // 2
         #one hot encode the colors
         for i in range(offset, offset + b_size):
             for j in range(offset, offset + b_size):
@@ -199,19 +195,19 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
                     tens[i,j, d * color_enc_size:(d+1) * color_enc_size] = binary(torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir]),color_enc_size)
 
     elif encoding == 'ordinal':
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         # Tiles around the board
         # To make sure the policy learns that the gray tiles are always one the border,
         # the reward for connecting to those tiles is bigger.
-        tens[0,:,1] = 0
-        tens[:,0,2] = 0
-        tens[MAX_BSIZE+1,:,0] = 0
-        tens[:,MAX_BSIZE+1,3] = 0
+        tens[0:SWAP_RANGE+1,:,1] = 0
+        tens[:,0+SWAP_RANGE+1,2] = 0
+        tens[SWAP_RANGE + MAX_BSIZE+1,:,0] = 0
+        tens[:,SWAP_RANGE + MAX_BSIZE+1,3] = 0
 
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
+        offset = (PADDED_SIZE - b_size) // 2
         #one hot encode the colors
         for i in range(offset, offset + b_size):
             for j in range(offset, offset + b_size):
@@ -227,19 +223,19 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
 
     else:
 
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
-        tens[0,:,N_COLORS + GRAY] = 1
-        tens[:,0,N_COLORS * 2 + GRAY] = 1
-        tens[MAX_BSIZE+1,:,GRAY] = 1
-        tens[:,MAX_BSIZE+1,N_COLORS * 3 + GRAY] = 1
+        tens[0:SWAP_RANGE+1,:,N_COLORS + GRAY] = 1
+        tens[:,0+SWAP_RANGE+1,N_COLORS * 2 + GRAY] = 1
+        tens[SWAP_RANGE+MAX_BSIZE+1,:,GRAY] = 1
+        tens[:,SWAP_RANGE+MAX_BSIZE+1,N_COLORS * 3 + GRAY] = 1
 
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
+        offset = (PADDED_SIZE - b_size) // 2 + 1
         #one hot encode the colors
-        for i in range(0,MAX_BSIZE+2):
-            for j in range(0,MAX_BSIZE+2):
+        for i in range(0,PADDED_SIZE):
+            for j in range(0,PADDED_SIZE):
 
                 if i >= offset and i < offset+b_size and j >= offset and j < offset+b_size:
                     tens[i,j,:] = 0
@@ -266,9 +262,9 @@ def base10(x:Tensor):
     return int(s)
 
 def pprint(state,bsize):
-    offset = (MAX_BSIZE + 2 - bsize) // 2
+    offset = (PADDED_SIZE - bsize) // 2
 
-    if state.size()[0] != MAX_BSIZE + 2:
+    if state.size()[0] != PADDED_SIZE:
         for s in state:
             print(s[offset:offset+bsize,offset:offset+bsize])
 
@@ -285,7 +281,7 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
 
     sol.int()
 
-    offset = (MAX_BSIZE + 2 - bsize) // 2
+    offset = (PADDED_SIZE - bsize) // 2
 
     if ENCODING == 'binary':
 
@@ -326,5 +322,5 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
     return list_sol
 
 
-def soft_lj(x):
-    return ((1/x)**2- 2 *(1/x)) + 1.5
+def ucb(q,count,step):
+    return q + 8 * torch.sqrt(-torch.log((count + 0.1)/(step + 0.1)))

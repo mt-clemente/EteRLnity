@@ -1,5 +1,6 @@
 import copy
 import random
+import einops
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,22 +9,23 @@ from param import *
 from segment_tree import MinSegmentTree, SumSegmentTree
 from hashlib import sha256
 from pytorch_memlab import profile
-from torchrl.modules import NoisyLinear
-
+from torch.nn import init
 
 # Memory buffer with PER
 class PrioritizedReplayMemory():
 
-    def __init__(self, size,Transition,alpha, batch_size,max_bsize,encoding_size,neighborhood_size):
+    def __init__(self, size,Transition,alpha, batch_size,encoding_size,meta = False):
 
         device = 'cpu'
 
         self.Transition = Transition
-        self.state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
-        self.next_state_buf = torch.empty((size,max_bsize+2,max_bsize+2,4*encoding_size))
+        self.state_buf = torch.empty((size,PADDED_SIZE,PADDED_SIZE,4*encoding_size))
+        self.next_state_buf = torch.empty((size,PADDED_SIZE,PADDED_SIZE,4*encoding_size))
         self.rews_buf = torch.zeros(size)
-        self.act_buf = torch.zeros(size,dtype=int)
-        self.state_val_buff = torch.zeros(size)
+        if meta:
+            self.act_buf = torch.zeros((size,2),dtype=int)
+        else:
+            self.act_buf = torch.zeros(size,3,dtype=int)
         self.final_buf = torch.empty((size),dtype=bool)
         self.max_size = size
         self.batch_size =  batch_size
@@ -46,7 +48,6 @@ class PrioritizedReplayMemory():
         next_state,
         reward,
         act,
-        state_val,
         final
     ):
 
@@ -54,7 +55,6 @@ class PrioritizedReplayMemory():
         self.next_state_buf[self.ptr] = next_state
         self.rews_buf[self.ptr] = reward
         self.act_buf[self.ptr] = act
-        self.state_val_buff[self.ptr] = state_val
         self.final_buf[self.ptr] = final
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
@@ -76,7 +76,6 @@ class PrioritizedReplayMemory():
         rews = self.rews_buf[indices]
         acts = self.act_buf[indices]
         final = self.final_buf[indices]
-        state_val = self.state_val_buff[indices]
         weights = np.array([self._calculate_weight(i, beta) for i in indices])
         
         return self.Transition(
@@ -84,7 +83,6 @@ class PrioritizedReplayMemory():
             next_state,
             rews,
             acts,
-            state_val,
             final,
             weights.reshape(-1,1),
             indices
@@ -162,7 +160,6 @@ class PrioritizedReplayMemory():
         next_state_buf:torch.Tensor,
         rew_buf:torch.Tensor,
         act_buf:torch.Tensor,
-        heurval_buf:torch.Tensor,
         final_buf:torch.Tensor
         ):
 
@@ -170,7 +167,6 @@ class PrioritizedReplayMemory():
         next_state_buf = next_state_buf.detach().cpu()
         rew_buf = rew_buf.detach().cpu()
         act_buf = act_buf.detach().cpu()
-        heurval_buf = heurval_buf.detach().cpu()
         final_buf = final_buf.detach().cpu()
         
         for i in range(rew_buf.size()[0]):
@@ -179,7 +175,6 @@ class PrioritizedReplayMemory():
                 next_state_buf[i],
                 rew_buf[i],
                 act_buf[i],
-                heurval_buf[i],
                 final_buf[i]
             )
 
@@ -189,14 +184,18 @@ class PrioritizedReplayMemory():
 
 
 class CPUBuffer:
-    def __init__(self,capacity:int,neighborhood_size:int,linked_mem:PrioritizedReplayMemory) -> None:
+    def __init__(self,capacity:int,linked_mem:PrioritizedReplayMemory, meta:bool = False) -> None:
         self.capacity = capacity
         self.linked_mem = linked_mem
-        self.state_buf = torch.empty((capacity,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE))
-        self.next_state_buf = torch.empty((capacity,MAX_BSIZE+2,MAX_BSIZE+2,4*COLOR_ENCODING_SIZE))
+        self.state_buf = torch.empty((capacity,PADDED_SIZE,PADDED_SIZE,4*COLOR_ENCODING_SIZE))
+        self.next_state_buf = torch.empty((capacity,PADDED_SIZE,PADDED_SIZE,4*COLOR_ENCODING_SIZE))
         self.rew_buf = torch.empty((capacity))
-        self.act_buf = torch.empty((capacity),dtype=int)
-        self.heurval_buf = torch.empty((capacity))
+
+        if meta:
+            self.act_buf = torch.empty((capacity,2),dtype=int)
+        else:
+            self.act_buf = torch.empty((capacity,3),dtype=int)
+
         self.final_buf = torch.empty((capacity),dtype=bool)
         self.ptr = 0
 
@@ -206,7 +205,6 @@ class CPUBuffer:
             next_state,
             reward,
             action,
-            heur_val,
             final
             ):
 
@@ -215,7 +213,6 @@ class CPUBuffer:
         self.next_state_buf[self.ptr] = next_state
         self.rew_buf[self.ptr] = reward
         self.act_buf[self.ptr] = action
-        self.heurval_buf[self.ptr] = heur_val
         self.final_buf[self.ptr] = final
 
         self.ptr += 1
@@ -229,7 +226,6 @@ class CPUBuffer:
             self.next_state_buf,
             self.rew_buf,
             self.act_buf,
-            self.heurval_buf,
             self.final_buf,
         )
         
@@ -242,7 +238,9 @@ class MoveBuffer():
     def __init__(self) -> None:
         self.state = None
         self.next_state = None
-        self.reward = None
+        self.m_reward = None
+        self.a_reward = None
+        self.tile = None
         self.action = None
         self.state_val = None
 
@@ -330,9 +328,9 @@ class StoppingCriterion():
 
         
 # Neural Network used in our model
-class DQN(nn.Module):
+class MetaDQN(nn.Module):
 
-    def __init__(self, h, w, outputs, device, encoding_size):
+    def __init__(self, input_size, ker_size, outputs, device, encoding_size):
 
         self.ouputs = outputs
 
@@ -344,51 +342,43 @@ class DQN(nn.Module):
         conv2d1_size = DIM_CONV2D1
         conv2d2_size = DIM_CONV2D2
 
-        self.support = torch.linspace(MIN_REWARD,MAX_REWARD,ATOMS,device=device)# FIXME:
-
-        super(DQN, self).__init__()
+        super(MetaDQN, self).__init__()
         self.device = device
-        self.conv3d1 = nn.utils.spectral_norm(nn.Conv3d(
+        self.conv3d1 = nn.Conv3d(
             in_channels=1,
             out_channels=conv3d_size,
             kernel_size= (k1,k1, 4 * encoding_size),
             dtype=UNIT,
             device=self.device,
-            ),
-            eps=1e-7
-        )
+            )
 
-        self.conv2d1 = nn.utils.spectral_norm(nn.Conv2d(
+        self.conv2d1 = nn.Conv2d(
             conv3d_size,
             conv2d1_size,
             kernel_size=k2,
             stride=1,
             dtype=UNIT,
             device=self.device
-            ),
-            eps=1e-7
-        )
+            )
         
+        
+        
+        convw = input_size - (k1-1) - (k2-1)
+        k3 = PADDED_SIZE - convw +1
 
-        self.conv2d2 = nn.utils.spectral_norm(nn.Conv2d(
+        self.conv2d2 = nn.ConvTranspose2d(
             conv2d1_size,
             conv2d2_size,
             kernel_size=k3,
             stride=1,
             dtype=UNIT,
             device=self.device
-            ),
-            eps=1e-7
-        )
-
-
-        # and therefore the input image size, so compute it.
-        def conv2d_size_out(size, kernel_size=3, stride=1):
-            return (size - (kernel_size - 1) - 1) // stride + 1
+            )
         
-        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w,k1),k2),k3)
-        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h,k1),k2),k3)
-        linear_input_size = convw * convh * conv2d2_size
+
+        convw2 = convw - 1 + k3
+
+        linear_input_size = convw2 ** 2 * conv2d2_size
 
         self.value_stream = nn.Linear(
             in_features=linear_input_size,
@@ -396,32 +386,155 @@ class DQN(nn.Module):
             device=self.device,
             dtype=UNIT,
         )
-        self.advantage_stream = nn.Linear(
-            in_features=linear_input_size,
-            out_features=outputs * ATOMS,
+
+        k4 = convw2 - MAX_BSIZE + 1
+
+        self.advantage_stream = nn.Conv2d(
+            conv2d2_size,
+            1,
+            kernel_size=k4,
             device=self.device,
             dtype=UNIT,
         )
 
 
-
-    def dist(self, x:torch.Tensor):
-        x = x.to(self.device)
-        x = self.conv3d1(x).squeeze(-1)
-        x = F.relu(x)
-        x = F.relu(self.conv2d1(x))
-        x = F.relu(self.conv2d2(x))
-        value = self.value_stream(x.view(x.size(0), -1))
-        advantage = self.advantage_stream(x.view(x.size(0), -1))
-
-        q_atoms = (value + (advantage - advantage.mean())).view(-1, self.ouputs, ATOMS)
-        dist = F.softmax(q_atoms, dim=-1)
-        dist = dist.clamp(min=1e-3)  # for avoiding nans
-        return  dist
+        self.ln1 = nn.BatchNorm2d(conv3d_size,device=device,dtype=UNIT)
+        self.ln2 = nn.BatchNorm2d(conv2d1_size,device=device,dtype=UNIT)
+        self.ln3 = nn.BatchNorm2d(conv2d2_size,device=device,dtype=UNIT)
+        self.advln = nn.LayerNorm([MAX_BSIZE,MAX_BSIZE],device=device,dtype=UNIT)
 
 
     def forward(self, x:torch.Tensor):
-        dist = self.dist(x)
-        q = torch.sum(dist * self.support, dim=2)
+        x = x.to(self.device)
+        x = self.conv3d1(x).squeeze(-1)
+        x = self.ln1(x)
+        x = F.elu(x)
+        x = F.elu(self.conv2d1(x))
+        x = self.ln2(x)
+        x = F.elu(self.conv2d2(x))
+        x = self.ln3(x).squeeze(-1)
 
-        return q
+        value = self.value_stream(x.view(x.size(0), -1))
+
+        advantage = self.advln(self.advantage_stream(x))
+        
+        q = value.view(value.size()[0],1,1,1) +(advantage - advantage.mean(dim=[2,3],keepdims=True))
+        q = q.clamp(min=1e-5)  # for avoiding nans
+        return  q
+
+        
+
+# Neural Network used in our model
+class Actuator(nn.Module):
+
+    def __init__(self, input_size, outputs, device, encoding_size):
+
+
+        self.outputs = outputs
+        self.inputs = input_size
+
+        k1 = KER3D
+        k2 = KER2D1
+        k3 = KER2D2
+
+        conv3d_size = DIM_CONV3D
+        conv2d1_size = DIM_CONV2D1
+        conv2d2_size = DIM_CONV2D2
+
+        super(Actuator, self).__init__()
+        self.device = device
+        self.conv3d1 = nn.Conv3d(
+            in_channels=1,
+            out_channels=conv3d_size,
+            kernel_size= (k1,k1, 4 * encoding_size),
+            dtype=UNIT,
+            device=self.device,
+            )
+
+        self.conv2d1 = nn.Conv2d(
+            conv3d_size,
+            conv2d1_size,
+            kernel_size=k2,
+            stride=1,
+            dtype=UNIT,
+            device=self.device
+            )
+        
+        
+
+        # and therefore the input image size, so compute it.
+        def conv2d_size_out(size, kernel_size=3, stride=1):
+            return (size - (kernel_size - 1) - 1) // stride + 1
+        
+        # convh = conv2d_size_out(conv2d_size_out(h,k1),k2)
+        # convw = conv2d_size_out(conv2d_size_out(w,k1),k2)
+        convw = conv2d_size_out(conv2d_size_out(2*input_size+1,k1),k2)
+
+        linear_input_size = convw ** 2 * conv2d1_size
+        self.value_stream = nn.Linear(
+            in_features=linear_input_size,
+            out_features=1,
+            device=self.device,
+            dtype=UNIT,
+        )
+
+        self.advantage_stream = nn.Linear(
+            linear_input_size,
+            outputs,
+            device=self.device,
+            dtype=UNIT,
+        )
+
+
+        self.ln1 = nn.BatchNorm2d(conv3d_size,device=device,dtype=UNIT)
+        self.ln2 = nn.BatchNorm2d(conv2d1_size,device=device,dtype=UNIT)
+        self.advln = nn.LayerNorm([outputs],device=device,dtype=UNIT)
+
+
+    
+    def forward(self, x:torch.Tensor,tile:torch.Tensor):
+
+        i = tile[:,0]
+        j = tile[:,1]
+        
+        if i.dim() == 1:
+            i.unsqueeze_(0)
+            j.unsqueeze_(0)
+
+        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device)-2
+        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device)-2
+
+        i.squeeze_(1)
+        j.squeeze_(1)
+
+        pad = [0]*(x.dim()*2)
+        pad[2] = self.inputs - 1
+        pad[3] = self.inputs - 1
+        pad[4] = self.inputs - 1
+        pad[5] = self.inputs - 1
+        x = F.pad(x,pad)
+
+        x = x.to(self.device)
+        batch = torch.arange(x.size()[0]).repeat((i.size()[1],1)).transpose(0,1)
+        try:
+            x = x[batch,torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1),i,:]
+        except:
+            print(x.size())
+            print(batch.size())
+            print(i.size())
+            print(torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1).size())
+        x = x[batch,:,j,:]
+        x.unsqueeze_(1)
+        x = self.conv3d1(x).squeeze(-1)
+        x = self.ln1(x)
+        x = F.elu(x)
+        x = F.elu(self.conv2d1(x))
+        x = self.ln2(x)
+        value = self.value_stream(x.view(x.size(0), -1))
+
+        advantage = self.advln(self.advantage_stream(x.view(x.size(0), -1)))
+        
+        q = (value + (advantage - advantage.mean(dim=-1,keepdim=True)))
+        q = q.clamp(min=1e-4)  # for avoiding nans
+        return  q 
+

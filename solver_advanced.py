@@ -139,7 +139,7 @@ def to_tensor(sol:list, encoding = 'binary') -> torch.Tensor:
 
     if encoding == 'binary':
         color_enc_size = ceil(torch.log2(torch.tensor(N_COLORS)))
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         # Tiles around the board
         # To make sure the policy learns that the gray tiles are always one the border,
@@ -164,7 +164,7 @@ def to_tensor(sol:list, encoding = 'binary') -> torch.Tensor:
                     tens[i,j, dir * color_enc_size:(dir+1) * color_enc_size] = binary(torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir]),color_enc_size)
 
     elif encoding == 'ordinal':
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         # Tiles around the board
         # To make sure the policy learns that the gray tiles are always one the border,
@@ -193,7 +193,7 @@ def to_tensor(sol:list, encoding = 'binary') -> torch.Tensor:
 
     else:
 
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         tens[0,:,N_COLORS + GRAY] = 1
         tens[:,0,N_COLORS * 2 + GRAY] = 1
