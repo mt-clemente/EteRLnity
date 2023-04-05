@@ -320,7 +320,6 @@ def train_model(hotstart:str = None):
                         actuator_target,
                         meta_net,
                         actuator_optimizer,
-                        device
                     )
                     
 
@@ -359,9 +358,13 @@ def train_model(hotstart:str = None):
 
 
 
-def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, target_net:Actuator, meta_net:MetaDQN,optimizer:torch.optim.Optimizer, device):
+def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, target_net:Actuator, meta_net:MetaDQN,optimizer:torch.optim.Optimizer):
 
-    
+    device = 'cuda'
+    policy_net = policy_net.to(device)
+    target_net = target_net.to(device)
+    meta_net = meta_net.to(device)
+
     for _ in range(BATCH_NB):
 
         # print("-----------------------------OPTI-----------------------------")
@@ -382,11 +385,18 @@ def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, targe
             tile_batch = action_batch[:,[1,2]]
             action_batch = action_batch[:,[0]]
 
+        print(torch.cuda.is_available())
+        # print(policy_net.device)
+
         state_values = policy_net(state_batch,tile_batch).gather(1,action_batch)
 
         with torch.no_grad():
+            print(next_state_batch.device)
+            print(not_final_mask.device)
             next_meta_val = meta_net(next_state_batch[not_final_mask])
             next_tile_batch = (next_meta_val == torch.amax(next_meta_val,(2,3)).unsqueeze(-1).unsqueeze(-1)).nonzero()[:,2:4]#FIXME: Q val equality
+            print(next_meta_val.device)
+            print(next_tile_batch.device)
             next_state_values = target_net(next_state_batch[not_final_mask],next_tile_batch).max(dim=-1).values
 
 
@@ -441,9 +451,15 @@ def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, targe
             }
         )
 
+    policy_net = policy_net.cpu()
+    target_net = target_net.cpu()
+    meta_net = meta_net.cpu()
 
 def optimize_meta(memory:PrioritizedReplayMemory, policy_net:MetaDQN, target_net:MetaDQN, optimizer:torch.optim.Optimizer, device):
 
+    device = 'cuda'
+    policy_net = policy_net.to(device)
+    target_net = target_net.to(device)
     
     for _ in range(BATCH_NB):
 
@@ -505,6 +521,8 @@ def optimize_meta(memory:PrioritizedReplayMemory, policy_net:MetaDQN, target_net
             }
         )
  
+    policy_net = policy_net.cpu()
+    target_net = target_net.cpu()
 
 
 

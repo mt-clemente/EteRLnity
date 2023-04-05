@@ -343,13 +343,12 @@ class MetaDQN(nn.Module):
         conv2d2_size = DIM_CONV2D2
 
         super(MetaDQN, self).__init__()
-        self.device = device
         self.conv3d1 = nn.Conv3d(
             in_channels=1,
             out_channels=conv3d_size,
             kernel_size= (k1,k1, 4 * encoding_size),
             dtype=UNIT,
-            device=self.device,
+            device=device,
             )
 
         self.conv2d1 = nn.Conv2d(
@@ -358,7 +357,7 @@ class MetaDQN(nn.Module):
             kernel_size=k2,
             stride=1,
             dtype=UNIT,
-            device=self.device
+            device=device
             )
         
         
@@ -372,7 +371,7 @@ class MetaDQN(nn.Module):
             kernel_size=k3,
             stride=1,
             dtype=UNIT,
-            device=self.device
+            device=device
             )
         
 
@@ -383,7 +382,7 @@ class MetaDQN(nn.Module):
         self.value_stream = nn.Linear(
             in_features=linear_input_size,
             out_features=1,
-            device=self.device,
+            device=device,
             dtype=UNIT,
         )
 
@@ -393,7 +392,7 @@ class MetaDQN(nn.Module):
             conv2d2_size,
             1,
             kernel_size=k4,
-            device=self.device,
+            device=device,
             dtype=UNIT,
         )
 
@@ -405,7 +404,6 @@ class MetaDQN(nn.Module):
 
 
     def forward(self, x:torch.Tensor):
-        x = x.to(self.device)
         x = self.conv3d1(x).squeeze(-1)
         x = self.ln1(x)
         x = F.elu(x)
@@ -439,16 +437,14 @@ class Actuator(nn.Module):
 
         conv3d_size = DIM_CONV3D
         conv2d1_size = DIM_CONV2D1
-        conv2d2_size = DIM_CONV2D2
 
         super(Actuator, self).__init__()
-        self.device = device
         self.conv3d1 = nn.Conv3d(
             in_channels=1,
             out_channels=conv3d_size,
             kernel_size= (k1,k1, 4 * encoding_size),
             dtype=UNIT,
-            device=self.device,
+            device=device,
             )
 
         self.conv2d1 = nn.Conv2d(
@@ -457,7 +453,7 @@ class Actuator(nn.Module):
             kernel_size=k2,
             stride=1,
             dtype=UNIT,
-            device=self.device
+            device=device
             )
         
         
@@ -474,14 +470,14 @@ class Actuator(nn.Module):
         self.value_stream = nn.Linear(
             in_features=linear_input_size,
             out_features=1,
-            device=self.device,
+            device=device,
             dtype=UNIT,
         )
 
         self.advantage_stream = nn.Linear(
             linear_input_size,
             outputs,
-            device=self.device,
+            device=device,
             dtype=UNIT,
         )
 
@@ -501,13 +497,11 @@ class Actuator(nn.Module):
             i.unsqueeze_(0)
             j.unsqueeze_(0)
 
-        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device) - SWAP_RANGE
-        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device) - SWAP_RANGE
+        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE
+        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE
 
         i.squeeze_(1)
         j.squeeze_(1)
-
-        x = x.to(self.device)
         batch = torch.arange(x.size()[0]).repeat((i.size()[1],1)).transpose(0,1)
         try:
             x = x[batch,torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1),i,:]
