@@ -501,28 +501,23 @@ class Actuator(nn.Module):
             i.unsqueeze_(0)
             j.unsqueeze_(0)
 
-        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device)-2
-        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device)-2
+        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device) - SWAP_RANGE
+        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=self.device) - SWAP_RANGE
 
         i.squeeze_(1)
         j.squeeze_(1)
-
-        pad = [0]*(x.dim()*2)
-        pad[2] = self.inputs - 1
-        pad[3] = self.inputs - 1
-        pad[4] = self.inputs - 1
-        pad[5] = self.inputs - 1
-        x = F.pad(x,pad)
 
         x = x.to(self.device)
         batch = torch.arange(x.size()[0]).repeat((i.size()[1],1)).transpose(0,1)
         try:
             x = x[batch,torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1),i,:]
-        except:
+        except BaseException as e:
             print(x.size())
             print(batch.size())
             print(i.size())
             print(torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1).size())
+            raise e
+        
         x = x[batch,:,j,:]
         x.unsqueeze_(1)
         x = self.conv3d1(x).squeeze(-1)

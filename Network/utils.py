@@ -322,5 +322,8 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
     return list_sol
 
 
-def ucb(q,count,step):
+def ucb(q,count,step,meta=False):
+    if meta:
+        return q + 80 * torch.sqrt(-torch.log((count + 0.1)/(step + 0.1)))
+
     return q + 8 * torch.sqrt(-torch.log((count + 0.1)/(step + 0.1)))

@@ -20,7 +20,7 @@ def train_model(hotstart:str = None):
     """
     args = parse_arguments()
     hotstart = args.hotstart
-    # torch.cuda.is_available = lambda : False
+    torch.cuda.is_available = lambda : False
     
     # -------------------- GAME INIT --------------------
 
@@ -63,7 +63,7 @@ def train_model(hotstart:str = None):
         actuator.load_state_dict(torch.load(hotstart))
     else:
         meta_net = MetaDQN(PADDED_SIZE, PADDED_SIZE, neighborhood_size, device, COLOR_ENCODING_SIZE)
-        actuator = Actuator(SWAP_RANGE+1,(2 * SWAP_RANGE + 1)**2 - 1 + 3, device,COLOR_ENCODING_SIZE)
+        actuator = Actuator(SWAP_RANGE,(2 * SWAP_RANGE + 1)**2 - 1 + 3, device,COLOR_ENCODING_SIZE)
     
     meta_net.train()
     actuator.train()
@@ -72,7 +72,7 @@ def train_model(hotstart:str = None):
     meta_target.load_state_dict(meta_net.state_dict())
     meta_target.eval()
     
-    actuator_target = Actuator(SWAP_RANGE+1,(2 * SWAP_RANGE + 1)**2 - 1 + 3, device,COLOR_ENCODING_SIZE)
+    actuator_target = Actuator(SWAP_RANGE,(2 * SWAP_RANGE + 1)**2 - 1 + 3, device,COLOR_ENCODING_SIZE)
     actuator_target.load_state_dict(actuator.state_dict())
     actuator_target.eval()
 
@@ -116,8 +116,9 @@ def train_model(hotstart:str = None):
 
     stopping_crit = StoppingCriterion(10000)
 
-    max_entropy = torch.log2(torch.tensor(neighborhood_size))
-    policy_entropy = max_entropy
+    meta_max_entropy = torch.log2(torch.tensor(MAX_BSIZE**2))
+    act_max_entropy = torch.log2(torch.tensor((2*SWAP_RANGE+1)**2-1+3))
+    policy_entropy = meta_max_entropy
 
     # -------------------- TRAINING LOOP --------------------
 
@@ -159,19 +160,21 @@ def train_model(hotstart:str = None):
                 with torch.no_grad():
                     meta_val = meta_net(state.unsqueeze(0).unsqueeze(0)).squeeze(0).squeeze(0)
                 
-                explorer = ucb(meta_val,meta_ucb_count,step)
+                explorer = ucb(meta_val,meta_ucb_count,step,True)
                 selected_tile = (explorer == torch.max(explorer)).nonzero()
 
                 selected_tile = selected_tile[random.randint(0,selected_tile.size()[0]-1)] + (SWAP_RANGE)
+                if torch.any((selected_tile+SWAP_RANGE) >= PADDED_SIZE):
+                    raise OSError
                 meta_ucb_count[selected_tile - SWAP_RANGE] += 1
 
 
                 with torch.no_grad():
                     action_val = actuator(state.unsqueeze(0).unsqueeze(0),selected_tile.unsqueeze(0)).squeeze(0)
 
-
                 action_explorer = ucb(action_val,act_ucb_count,step)
                 action = torch.argmax(action_explorer)
+                act_ucb_count[action] += 1
                 new_state = gen_neighbor(state,selected_tile,action)
                 new_state_val, score = eval_sol(new_state,bsize)
 
@@ -179,20 +182,24 @@ def train_model(hotstart:str = None):
                     a_reward = - 3
                 
                 else:
-                    a_reward =  (3 * max(score - prev_state_score,0) + min(score - prev_state_score,0)) / 10
+                    a_reward =  (4 * max(score - prev_state_score,0) +0.25 * min(score - prev_state_score,0)) / 4
 
-                
-                if score - prev_state_score > 0:
-                    m_reward = 1 
-                    ep_good_moves += 1
-                else:
-                    m_reward = 0
+                ep_reward += a_reward
+
 
                 
                 if score > episode_best_score:
                     print(f"Ep {episode:>7} - score : {score}")
+                    m_reward = 2
                     episode_best_score = score
                     episode_best_state = state                    
+                    ep_good_moves += 1
+
+                elif score - prev_state_score > 0:
+                    m_reward = 0.5 * score / episode_best_score
+                    ep_good_moves += 1
+                else:
+                    m_reward = 0
 
                 stopping_crit.update(score,episode_best_score)
 
@@ -243,7 +250,7 @@ def train_model(hotstart:str = None):
                         action,
                         final=True
                     )
-                    wandb.log({"Mean episode reward":ep_reward/(step - ep_start + 1e-5),'Mean good moves per ep':ep_good_moves/(step - ep_start + 1e-5)})
+                    wandb.log({"Actuator episode reward":ep_reward/(step - ep_start + 1e-5),'Mean good moves per ep':ep_good_moves/(step - ep_start + 1e-5)})
 
 
                 
@@ -266,13 +273,14 @@ def train_model(hotstart:str = None):
                     act_policy_prob = act_policy_prob[act_policy_prob != 0]
                     act_policy_entropy = -(act_policy_prob * torch.log2(act_policy_prob)).sum()
 
-                    
+                
+                log_tile = selected_tile-SWAP_RANGE
 
                 wandb.log(
                     {   
-                        'A Relative policy entropy': act_policy_entropy/max_entropy,
-                        'M Relative policy entropy': policy_entropy/max_entropy,
-                        'Meta Q':meta_val[selected_tile-SWAP_RANGE],
+                        'A Relative policy entropy': act_policy_entropy/act_max_entropy,
+                        'M Relative policy entropy': policy_entropy/meta_max_entropy,
+                        'Meta Q':meta_val[log_tile[0],log_tile[1]],
                         'Actuator Q':action_val[action],
                         'Actuator Reward':a_reward,
                         'Meta Reward': m_reward,
@@ -356,7 +364,7 @@ def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, targe
     
     for _ in range(BATCH_NB):
 
-        print("-----------------------------OPTI-----------------------------")
+        # print("-----------------------------OPTI-----------------------------")
         torch.cuda.empty_cache()
 
         batch = memory.sample()
@@ -398,7 +406,7 @@ def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, targe
         g = 0
         for name,param in policy_net.named_parameters():
             g += torch.norm(param.grad)
-            print(f"{name:<28} - {torch.norm(param.grad).item()}")
+            # print(f"{name:<28} - {torch.norm(param.grad).item()}")
             param.grad.clamp_(-1,1)
 
         optimizer.step()
@@ -439,7 +447,7 @@ def optimize_meta(memory:PrioritizedReplayMemory, policy_net:MetaDQN, target_net
     
     for _ in range(BATCH_NB):
 
-        print("-----------------------------OPTI-----------------------------")
+        # print("-----------------------------OPTI-----------------------------")
         torch.cuda.empty_cache()
 
         batch = memory.sample()
@@ -476,7 +484,7 @@ def optimize_meta(memory:PrioritizedReplayMemory, policy_net:MetaDQN, target_net
         # gradient clipping
         g = 0
         for name,param in policy_net.named_parameters():
-            print(f"{name:<28} + {torch.norm(param.grad).item()}")
+            # print(f"{name:<28} + {torch.norm(param.grad).item()}")
             g += torch.norm(param.grad)
             param.grad.clamp_(-1,1)
 
@@ -574,9 +582,7 @@ def scramlbe(state:torch.Tensor, rot_mask:torch.Tensor, n_rounds:int = 2000):
 
     for _ in range(n_rounds):
         
-        k = random.randint(0,rot_mask.size()[0]-1)
-        d = random.randint(1,4)
-        state = rotate_elements(state,rot_mask[k],d)
+        state = rotate(state,torch.randint(0+SWAP_RANGE,MAX_BSIZE+SWAP_RANGE,(2,)),random.randint(0,2))
 
     return state
 
