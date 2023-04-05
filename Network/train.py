@@ -10,6 +10,8 @@ from utils import *
 from param import *
 import wandb
 
+LOG_EVERY = 600
+
 def train_model(hotstart:str = None):
 
     """
@@ -164,6 +166,7 @@ def train_model(hotstart:str = None):
                 selected_tile = (explorer == torch.max(explorer)).nonzero()
 
                 selected_tile = selected_tile[random.randint(0,selected_tile.size()[0]-1)] + (SWAP_RANGE)
+                selected_tile = torch.tensor([15,15])
                 if torch.any((selected_tile+SWAP_RANGE) >= PADDED_SIZE):
                     raise OSError
                 meta_ucb_count[selected_tile - SWAP_RANGE] += 1
@@ -225,7 +228,6 @@ def train_model(hotstart:str = None):
 
 
 
-
                 # end on either max score or trajectory does not lead to anything
                 if ((bsize + 1) * bsize * 2 - score) == 0 or stopping_crit.is_stale():
                     if stopping_crit.is_stale():
@@ -247,10 +249,11 @@ def train_model(hotstart:str = None):
                         state,
                         torch.zeros_like(state),
                         a_reward,
-                        action,
+                        torch.hstack((action,selected_tile)),
                         final=True
                     )
-                    wandb.log({"Actuator episode reward":ep_reward/(step - ep_start + 1e-5),'Mean good moves per ep':ep_good_moves/(step - ep_start + 1e-5)})
+                    if step % LOG_EVERY == 0:
+                        wandb.log({"Actuator episode reward":ep_reward/(step - ep_start + 1e-5),'Mean good moves per ep':ep_good_moves/(step - ep_start + 1e-5)})
 
 
                 
@@ -262,7 +265,6 @@ def train_model(hotstart:str = None):
                 move_buffer.tile = selected_tile
 
 
-                wandb.log({'Score':score})
                 state = new_state
                 with torch.no_grad():
                     policy_prob = torch.softmax(meta_val,dim=-1).squeeze(-1)
@@ -276,19 +278,22 @@ def train_model(hotstart:str = None):
                 
                 log_tile = selected_tile-SWAP_RANGE
 
-                wandb.log(
-                    {   
-                        'A Relative policy entropy': act_policy_entropy/act_max_entropy,
-                        'M Relative policy entropy': policy_entropy/meta_max_entropy,
-                        'Meta Q':meta_val[log_tile[0],log_tile[1]],
-                        'Actuator Q':action_val[action],
-                        'Actuator Reward':a_reward,
-                        'Meta Reward': m_reward,
-                        'Episode':episode,
-                        'Select min count.':meta_ucb_count.min(),
-                        'Action min count.':act_ucb_count.min(),
-                    }
-                )
+                if step%LOG_EVERY==0:
+
+                    wandb.log(
+                        {   
+                            'Score':score,
+                            'A Relative policy entropy': act_policy_entropy/act_max_entropy,
+                            'M Relative policy entropy': policy_entropy/meta_max_entropy,
+                            'Meta Q':meta_val[log_tile[0],log_tile[1]],
+                            'Actuator Q':action_val[action],
+                            'Actuator Reward':a_reward,
+                            'Meta Reward': m_reward,
+                            'Episode':episode,
+                            'Select min count.':meta_ucb_count.min(),
+                            'Action min count.':act_ucb_count.min(),
+                        }
+                    )
                 # -------------------- MODEL OPTIMIZATION --------------------
 
                 
@@ -385,19 +390,13 @@ def optimize_actuator(memory:PrioritizedReplayMemory, policy_net:Actuator, targe
             tile_batch = action_batch[:,[1,2]]
             action_batch = action_batch[:,[0]]
 
-        print(torch.cuda.is_available())
-        # print(policy_net.device)
 
         state_values = policy_net(state_batch,tile_batch).gather(1,action_batch)
 
         with torch.no_grad():
-            print(next_state_batch.device)
-            print(not_final_mask.device)
             next_meta_val = meta_net(next_state_batch[not_final_mask])
             next_tile_batch = (next_meta_val == torch.amax(next_meta_val,(2,3)).unsqueeze(-1).unsqueeze(-1)).nonzero()[:,2:4]#FIXME: Q val equality
-            print(next_meta_val.device)
-            print(next_tile_batch.device)
-            next_state_values = target_net(next_state_batch[not_final_mask],next_tile_batch).max(dim=-1).values
+            next_state_values = target_net(next_state_batch[not_final_mask],next_tile_batch[not_final_mask]).max(dim=-1).values
 
 
         expected_state_values = torch.zeros_like(state_values).squeeze(-1)

@@ -431,12 +431,11 @@ class Actuator(nn.Module):
         self.outputs = outputs
         self.inputs = input_size
 
-        k1 = KER3D
-        k2 = KER2D1
-        k3 = KER2D2
 
-        conv3d_size = DIM_CONV3D
+        conv3d_size = ACT_DIM_CONV3D
+        k1 = ACT_KER3D
         conv2d1_size = DIM_CONV2D1
+        k2 = ACT_KER2D1
 
         super(Actuator, self).__init__()
         self.conv3d1 = nn.Conv3d(
@@ -497,9 +496,8 @@ class Actuator(nn.Module):
             i.unsqueeze_(0)
             j.unsqueeze_(0)
 
-        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE
-        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE
-
+        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE - 1
+        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE - 1
         i.squeeze_(1)
         j.squeeze_(1)
         batch = torch.arange(x.size()[0]).repeat((i.size()[1],1)).transpose(0,1)
