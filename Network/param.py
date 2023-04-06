@@ -12,7 +12,8 @@ PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
 SWAP_RANGE = 2
 
 MAX_BSIZE = 16
-PADDED_SIZE = MAX_BSIZE + 2 * (SWAP_RANGE + 1)
+
+PADDED_SIZE = MAX_BSIZE + 2
 NORTH = 0
 SOUTH = 1
 WEST = 2
@@ -26,24 +27,14 @@ N_COLORS = 23
 
 
 # -------------------- NETWORK SETTINGS -------------------- 
-# META
-DIM_CONV3D = 512
-KER3D = 2
-DIM_CONV2D1 = 256
-KER2D1 = 2
-DIM_CONV2D2 = 128
-KER2D2 = 3
 
-# ACTUATPR
-ACT_DIM_CONV3D = 256
-ACT_KER3D = 2
-ACT_DIM_CONV2D1 = 128
-ACT_KER2D1 = 2
-ACT_DIM_CONV2D2 = 128
-ACT_KER2D2 = 3
+EMBEDDING_DIM = 16
+NUM_LAYERS = 4
+NUM_HEADS = 2
+DIM_HIDDEN = 128
 
 # -------------------- TRAINING SETTINGS -------------------- 
-UNIT = torch.float
+UNIT = torch.half
 
 ENCODING = 'ordinal'
 
@@ -56,27 +47,23 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-BATCH_NB = 10
-CHECKPOINT_PERIOD = 100000
-BATCH_SIZE = 512
-META_LR = 5e-7
-ACT_LR = 5e-6
+BATCH_NB = 20
+CHECKPOINT_PERIOD = 10000
+BATCH_SIZE = 64
 TARGET_UPDATE = 4000
 MEM_SIZE = 2**17 # Has to be a power of two // use of segment trees
 OPT_EPSILON = 1e-6
 PRIO_EPSILON = 1e-7
+LR = 1e-6
 ALPHA = 0.4
 BETA = 0.9
-GAMMA = 0.975
+GAMMA = 0.92
 TRAIN_FREQ = 800
-TABU_LENGTH = 0
 
 CONFIG = {
     'encoding':ENCODING,
     'unit':UNIT,
     'Batch size':BATCH_SIZE,
-    'Meta learning rate':META_LR,
-    'Actuator learning rate':ACT_LR,
     'Target update':TARGET_UPDATE,
     'Replay size':MEM_SIZE,
     'Prio epsilon':PRIO_EPSILON,
@@ -84,10 +71,4 @@ CONFIG = {
     'Beta':BETA,
     'Gamma':GAMMA,
     'Train frequence':TRAIN_FREQ,
-    'Dim conv3d':DIM_CONV3D,
-    'Size ker3d':KER3D,
-    'Dim conv2d1':DIM_CONV2D1,
-    'Size ker2d1':KER2D1,
-    'Dim conv2d2':DIM_CONV2D2,
-    'Size ker2d2':KER2D2,
 }

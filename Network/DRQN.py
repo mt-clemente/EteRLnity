@@ -1,4 +1,5 @@
 import copy
+import math
 import random
 import einops
 import numpy as np
@@ -14,18 +15,15 @@ from torch.nn import init
 # Memory buffer with PER
 class PrioritizedReplayMemory():
 
-    def __init__(self, size,Transition,alpha, batch_size,encoding_size,meta = False):
+    def __init__(self, size,Transition,alpha, batch_size,encoding_size,n_tiles):
 
         device = 'cpu'
 
         self.Transition = Transition
-        self.state_buf = torch.empty((size,PADDED_SIZE,PADDED_SIZE,4*encoding_size))
-        self.next_state_buf = torch.empty((size,PADDED_SIZE,PADDED_SIZE,4*encoding_size))
+        self.state_buf = torch.empty((size,n_tiles),dtype=bool)
+        self.next_state_buf = torch.empty((size,n_tiles),dtype=bool)
         self.rews_buf = torch.zeros(size)
-        if meta:
-            self.act_buf = torch.zeros((size,2),dtype=int)
-        else:
-            self.act_buf = torch.zeros(size,3,dtype=int)
+        self.act_buf = torch.zeros(size,dtype=int)
         self.final_buf = torch.empty((size),dtype=bool)
         self.max_size = size
         self.batch_size =  batch_size
@@ -184,17 +182,14 @@ class PrioritizedReplayMemory():
 
 
 class CPUBuffer:
-    def __init__(self,capacity:int,linked_mem:PrioritizedReplayMemory, meta:bool = False) -> None:
+    def __init__(self,capacity:int,n_tiles:int,linked_mem:PrioritizedReplayMemory) -> None:
         self.capacity = capacity
         self.linked_mem = linked_mem
-        self.state_buf = torch.empty((capacity,PADDED_SIZE,PADDED_SIZE,4*COLOR_ENCODING_SIZE))
-        self.next_state_buf = torch.empty((capacity,PADDED_SIZE,PADDED_SIZE,4*COLOR_ENCODING_SIZE))
+        self.state_buf = torch.empty((capacity,n_tiles),dtype=bool)
+        self.next_state_buf = torch.empty((capacity,n_tiles),dtype=bool)
         self.rew_buf = torch.empty((capacity))
 
-        if meta:
-            self.act_buf = torch.empty((capacity,2),dtype=int)
-        else:
-            self.act_buf = torch.empty((capacity,3),dtype=int)
+        self.act_buf = torch.empty((capacity),dtype=int)
 
         self.final_buf = torch.empty((capacity),dtype=bool)
         self.ptr = 0
@@ -238,11 +233,8 @@ class MoveBuffer():
     def __init__(self) -> None:
         self.state = None
         self.next_state = None
-        self.m_reward = None
-        self.a_reward = None
-        self.tile = None
+        self.reward = None
         self.action = None
-        self.state_val = None
 
 
 class TabuList():
@@ -316,7 +308,7 @@ class StoppingCriterion():
         if self.counter > self.threshold:
             self.eos = True
 
-    def is_stale(self):
+    def stop(self):
         return self.eos
         
     
@@ -326,202 +318,107 @@ class StoppingCriterion():
         self.eos = False
 
 
-        
-# Neural Network used in our model
-class MetaDQN(nn.Module):
-
-    def __init__(self, input_size, ker_size, outputs, device, encoding_size):
-
-        self.ouputs = outputs
-
-        k1 = KER3D
-        k2 = KER2D1
-        k3 = KER2D2
-
-        conv3d_size = DIM_CONV3D
-        conv2d1_size = DIM_CONV2D1
-        conv2d2_size = DIM_CONV2D2
-
-        super(MetaDQN, self).__init__()
-        self.conv3d1 = nn.Conv3d(
-            in_channels=1,
-            out_channels=conv3d_size,
-            kernel_size= (k1,k1, 4 * encoding_size),
-            dtype=UNIT,
-            device=device,
-            )
-
-        self.conv2d1 = nn.Conv2d(
-            conv3d_size,
-            conv2d1_size,
-            kernel_size=k2,
-            stride=1,
-            dtype=UNIT,
-            device=device
-            )
-        
-        
-        
-        convw = input_size - (k1-1) - (k2-1)
-        k3 = PADDED_SIZE - convw +1
-
-        self.conv2d2 = nn.ConvTranspose2d(
-            conv2d1_size,
-            conv2d2_size,
-            kernel_size=k3,
-            stride=1,
-            dtype=UNIT,
-            device=device
-            )
-        
-
-        convw2 = convw - 1 + k3
-
-        linear_input_size = convw2 ** 2 * conv2d2_size
-
-        self.value_stream = nn.Linear(
-            in_features=linear_input_size,
-            out_features=1,
-            device=device,
-            dtype=UNIT,
+class oldDTQN(nn.Module):
+    def __init__(self, num_embeddings, embedding_dim, num_layers, num_heads, dim_hidden, device):
+        super().__init__()
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim,device=device,dtype=UNIT)
+        self.transformer_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                embedding_dim,
+                num_heads,
+                dim_hidden,
+                batch_first = True,
+                device=device,
+                dtype=UNIT
+            ),
+            num_layers,
         )
+        self.fc = nn.Linear(embedding_dim, num_embeddings,device=device,dtype=UNIT)
 
-        k4 = convw2 - MAX_BSIZE + 1
+        self.repeat_id = torch.arange(1024,device=device,dtype=int).repeat(BATCH_SIZE,1)
 
-        self.advantage_stream = nn.Conv2d(
-            conv2d2_size,
-            1,
-            kernel_size=k4,
-            device=device,
-            dtype=UNIT,
-        )
-
-
-        self.ln1 = nn.BatchNorm2d(conv3d_size,device=device,dtype=UNIT)
-        self.ln2 = nn.BatchNorm2d(conv2d1_size,device=device,dtype=UNIT)
-        self.ln3 = nn.BatchNorm2d(conv2d2_size,device=device,dtype=UNIT)
-        self.advln = nn.LayerNorm([MAX_BSIZE,MAX_BSIZE],device=device,dtype=UNIT)
-
-
-    def forward(self, x:torch.Tensor):
-        x = self.conv3d1(x).squeeze(-1)
-        x = self.ln1(x)
-        x = F.elu(x)
-        x = F.elu(self.conv2d1(x))
-        x = self.ln2(x)
-        x = F.elu(self.conv2d2(x))
-        x = self.ln3(x).squeeze(-1)
-
-        value = self.value_stream(x.view(x.size(0), -1))
-
-        advantage = self.advln(self.advantage_stream(x))
+    def forward(self, mask):
         
-        q = value.view(value.size()[0],1,1,1) +(advantage - advantage.mean(dim=[2,3],keepdims=True))
-        q = q.clamp(min=1e-5)  # for avoiding nans
-        return  q
-
+        if mask.dim() == 1:
+            embedded_tiles = self.embedding(self.repeat_id[0][mask])
+        elif mask.dim() == 2:
+            embedded_tiles = self.embedding(self.repeat_id[:mask.size()[0]][mask])
+        else:
+            raise RuntimeError
         
-
-# Neural Network used in our model
-class Actuator(nn.Module):
-
-    def __init__(self, input_size, outputs, device, encoding_size):
+        print(embedded_tiles.size(),mask.size())
+        x = embedded_tiles * mask.unsqueeze(-1)
+        transformer_output = self.transformer_encoder(x,mask=None)
 
 
-        self.outputs = outputs
-        self.inputs = input_size
+        if mask.dim() == 1:
+            predicted_tile_scores = self.fc(transformer_output[-1])
+        elif mask.dim() == 2:
+            predicted_tile_scores = self.fc(transformer_output[:,-1])
 
-
-        conv3d_size = ACT_DIM_CONV3D
-        k1 = ACT_KER3D
-        conv2d1_size = DIM_CONV2D1
-        k2 = ACT_KER2D1
-
-        super(Actuator, self).__init__()
-        self.conv3d1 = nn.Conv3d(
-            in_channels=1,
-            out_channels=conv3d_size,
-            kernel_size= (k1,k1, 4 * encoding_size),
-            dtype=UNIT,
-            device=device,
-            )
-
-        self.conv2d1 = nn.Conv2d(
-            conv3d_size,
-            conv2d1_size,
-            kernel_size=k2,
-            stride=1,
-            dtype=UNIT,
-            device=device
-            )
-        
-        
-
-        # and therefore the input image size, so compute it.
-        def conv2d_size_out(size, kernel_size=3, stride=1):
-            return (size - (kernel_size - 1) - 1) // stride + 1
-        
-        # convh = conv2d_size_out(conv2d_size_out(h,k1),k2)
-        # convw = conv2d_size_out(conv2d_size_out(w,k1),k2)
-        convw = conv2d_size_out(conv2d_size_out(2*input_size+1,k1),k2)
-
-        linear_input_size = convw ** 2 * conv2d1_size
-        self.value_stream = nn.Linear(
-            in_features=linear_input_size,
-            out_features=1,
-            device=device,
-            dtype=UNIT,
-        )
-
-        self.advantage_stream = nn.Linear(
-            linear_input_size,
-            outputs,
-            device=device,
-            dtype=UNIT,
-        )
-
-
-        self.ln1 = nn.BatchNorm2d(conv3d_size,device=device,dtype=UNIT)
-        self.ln2 = nn.BatchNorm2d(conv2d1_size,device=device,dtype=UNIT)
-        self.advln = nn.LayerNorm([outputs],device=device,dtype=UNIT)
-
-
+        return predicted_tile_scores
     
-    def forward(self, x:torch.Tensor,tile:torch.Tensor):
 
-        i = tile[:,0]
-        j = tile[:,1]
+class DTQN(nn.Module):
+    def __init__(self, board_size, num_tiles, embedding_dim, num_layers, num_heads, dim_hidden, device):
+        super(DTQN, self).__init__()
+        self.board_size = board_size
+        self.num_tiles = num_tiles
+        self.embedding_dim = embedding_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.dim_hidden = dim_hidden
         
-        if i.dim() == 1:
-            i.unsqueeze_(0)
-            j.unsqueeze_(0)
-
-        i = tile[:,0].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE - 1
-        j = tile[:,1].unsqueeze(1) + torch.arange(2 * self.inputs+1, device=x.device) - SWAP_RANGE - 1
-        i.squeeze_(1)
-        j.squeeze_(1)
-        batch = torch.arange(x.size()[0]).repeat((i.size()[1],1)).transpose(0,1)
-        try:
-            x = x[batch,torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1),i,:]
-        except BaseException as e:
-            print(x.size())
-            print(batch.size())
-            print(i.size())
-            print(torch.zeros(x.size(0),dtype=int).repeat(2 * self.inputs+1,1).transpose(0,1).size())
-            raise e
+        self.positional_encoding = self._get_positional_encoding()
+        self.tile_embedding = nn.Embedding(num_tiles, embedding_dim)
         
-        x = x[batch,:,j,:]
-        x.unsqueeze_(1)
-        x = self.conv3d1(x).squeeze(-1)
-        x = self.ln1(x)
-        x = F.elu(x)
-        x = F.elu(self.conv2d1(x))
-        x = self.ln2(x)
-        value = self.value_stream(x.view(x.size(0), -1))
-
-        advantage = self.advln(self.advantage_stream(x.view(x.size(0), -1)))
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=embedding_dim,
+                nhead=num_heads,
+                dim_feedforward=dim_hidden,
+                device=device
+            ),
+            num_layers=num_layers,
+        )
         
-        q = (value + (advantage - advantage.mean(dim=-1,keepdim=True)))
-        q = q.clamp(min=1e-4)  # for avoiding nans
-        return  q 
+        self.fc = nn.Linear(embedding_dim, num_tiles,device=device)
 
+
+    def forward(self, board:torch.Tensor, tile:torch.Tensor,mask:torch.BoolTensor):
+        batch_size = board.shape[0]
+        
+        # Flatten neighbors
+        sequence = torch.hstack((
+            board[torch.arange(batch_size,device=board.device),tile[:,0]-1,tile[:,1]].view(4),
+            board[torch.arange(batch_size,device=board.device),tile[:,0],tile[:,1]-1].view(4),
+            board[torch.arange(batch_size,device=board.device),tile[:,0],tile[:,1]+1].view(4)))
+        
+
+        pad_mask = torch.zeros(sequence) == False
+
+        # The tile on the right is only important on the right of the board
+        pad_mask[:,8:] = (tile[:,] != MAX_BSIZE)
+        
+        # Embed tiles
+        tile_embedded = self.tile_embedding(sequence)
+        
+        # Add positional encoding
+        positional_encoding = self.positional_encoding[:tile_embedded.shape[1], :].unsqueeze(0).expand(batch_size, -1, -1)
+        positional_encoded = tile_embedded + positional_encoding.to(tile_embedded.device)
+
+        # Transformer encoding
+        transformer_output = self.transformer(positional_encoded.transpose(0, 1),src_key_padding_mask=pad_mask).transpose(0, 1)
+        
+        # Output
+        q = self.fc(transformer_output)
+        q = q * mask
+        return q
+    
+    def _get_positional_encoding(self):
+        pe = torch.zeros(self.board_size ** 2, self.embedding_dim)
+        position = torch.arange(0, self.board_size ** 2, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.embedding_dim, 2).float() * (-math.log(10000.0) / self.embedding_dim))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe
