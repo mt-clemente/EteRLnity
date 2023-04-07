@@ -28,15 +28,14 @@ N_COLORS = 23
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-EMBEDDING_DIM = 16
-NUM_LAYERS = 4
-NUM_HEADS = 2
-DIM_HIDDEN = 128
+
+HIDDEN_SIZES = [512,256]
+KERNEL_SIZES = [3,2]
 
 # -------------------- TRAINING SETTINGS -------------------- 
-UNIT = torch.half
+UNIT = torch.float
 
-ENCODING = 'ordinal'
+ENCODING = 'binary'
 
 if ENCODING == 'binary':
     COLOR_ENCODING_SIZE = ceil(log2(N_COLORS))
@@ -47,28 +46,17 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-BATCH_NB = 20
+EPOCHS = 20
 CHECKPOINT_PERIOD = 10000
 BATCH_SIZE = 64
-TARGET_UPDATE = 4000
-MEM_SIZE = 2**17 # Has to be a power of two // use of segment trees
 OPT_EPSILON = 1e-6
-PRIO_EPSILON = 1e-7
 LR = 1e-6
-ALPHA = 0.4
-BETA = 0.9
 GAMMA = 0.92
-TRAIN_FREQ = 800
+CLIP_RATIO = 0.2
 
 CONFIG = {
     'encoding':ENCODING,
     'unit':UNIT,
     'Batch size':BATCH_SIZE,
-    'Target update':TARGET_UPDATE,
-    'Replay size':MEM_SIZE,
-    'Prio epsilon':PRIO_EPSILON,
-    'Alpha':ALPHA,
-    'Beta':BETA,
     'Gamma':GAMMA,
-    'Train frequence':TRAIN_FREQ,
 }
