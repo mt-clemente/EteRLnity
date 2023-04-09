@@ -58,7 +58,7 @@ def train_model(hotstart:str = None):
     'lr' : LR ,
     'epochs' : EPOCHS ,
     'minibatch_size' : MINIBATCH_SIZE ,
-    'horizon' : HORIZON,
+    'horizon' : HORIZON * n_tiles,
     'state_dim' : bsize+2,
     'conv_sizes': CONV_SIZES,
     'hidden_size':HIDDEN_SIZE,
@@ -78,7 +78,7 @@ def train_model(hotstart:str = None):
         n_tiles=n_tiles,
         bsize=bsize+2,
         ep_length=bsize**2,
-        capacity=HORIZON,
+        capacity=HORIZON*n_tiles,
         device=device
     )
 
@@ -125,7 +125,7 @@ def train_model(hotstart:str = None):
 
             while not episode_end:
 
-
+                print(step)
                 trajectory = ep_buf.get_lastk(ep_step)#FIXME: Seq len
                 with torch.no_grad():
                     policy, value = agent.model.get_action(trajectory)
@@ -178,6 +178,10 @@ def train_model(hotstart:str = None):
                         reward_to_go=reward_to_go,
                         final=1
                     )
+                    memory.load(
+                        ep_buf,
+                        ep_step+1
+                    )
                     if episode % 10 == 0:
                         print(f"END EPISODE {episode} - Conflicts {conflicts}/{bsize * 2 *(bsize+1)}",end='\r')
                     episode_end = True
@@ -187,7 +191,7 @@ def train_model(hotstart:str = None):
                         wandb.log({"Mean episode reward":ep_reward/(step - ep_start + 1e-5),'Final conflicts':conflicts})
                     
 
-                if (step) % HORIZON == 0 and step != 0:
+                if (step % (HORIZON * n_tiles)) == 0 and step != 0:
 
                     agent.update(
                         mem=memory

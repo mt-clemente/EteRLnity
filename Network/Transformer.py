@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from datetime import datetime
-from einops import rearrange
+from einops import rearrange, repeat
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -53,7 +53,7 @@ class PPOAgent:
         
     def compute_gae(self, rewards, values, next_values, finals):
 
-        td_errors = rewards[:,1:] + self.gamma * next_values * (1 - finals) - values
+        td_errors = rewards + self.gamma * next_values * (1 - finals) - values
         gae = 0
         advantages = torch.zeros_like(td_errors)
         for t in reversed(range(len(td_errors))):
@@ -63,9 +63,12 @@ class PPOAgent:
     
     # def update(self, states, actions, old_policies, values, advantages, returns):
     def update(self,mem:BatchMemory):
+        
+        # FIXME: check timestep
+        last_seq_rewards = mem['rew_buf'][torch.arange(mem['rew_buf'].size()[0]),mem['timestep_buff']]
 
         advantages = self.compute_gae(
-            rewards=mem['rew_buf'],
+            rewards=last_seq_rewards,
             values=mem['value_buf'],
             next_values=mem['next_value_buf'],
             finals=mem['final_buf']
@@ -76,21 +79,18 @@ class PPOAgent:
         
         device = 'cuda'
         t0 = datetime.now()
-        print(mem['state_buf'].size())
-        print(mem['act_buf'].size())
-        print(mem['policy_buf'].size())
-        print(advantages.size())
-        print(returns.size())
+        batch_size, ep_length = mem['state_buf'].size()[:2]
+        timestep_seq = repeat(torch.arange(ep_length-1,device=mem.device),'a -> b a',b = batch_size)
+        timestep_seq[timestep_seq > repeat(mem['timestep_buff'],'b -> b e',e=ep_length-1)] = 0
 
-        #FIXME: padding -> Dont forget SOS
- 
         dataset = TensorDataset(
-            rearrange(mem['state_buf'][:,1:],'b ep h w d -> (b ep) h w d').unsqueeze(1).to(device),
-            rearrange(mem['act_buf'],'b ep -> (b ep)').to(device),
-            rearrange(mem['rew_buf'][:,1:],'b ep -> (b ep)').to(device),
-            rearrange(mem['policy_buf'][:,1:],'b ep p -> (b ep) p').to(device),
-            rearrange(advantages,'b ep -> (b ep)').to(device),
-            rearrange(returns,'b ep -> (b ep)').to(device)
+            mem['state_buf'][:,1:],
+            mem['act_buf'],
+            mem['rew_buf'][:,1:],
+            mem['policy_buf'][:,1:],
+            advantages,
+            returns,
+            timestep_seq
         )
 
         loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True)
@@ -99,22 +99,31 @@ class PPOAgent:
         # Perform multiple update epochs
         for k in range(self.epochs):
             for batch in loader:
-                batch_states, batch_actions, batch_rtg,batch_old_policies, batch_advantages, batch_returns = batch
+                batch_states, batch_actions, batch_rtg,batch_old_policies, batch_advantages, batch_returns, batch_timesteps = batch
 
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-7)
                 batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-7)
+
                 # Calculate new policy and value estimates
-                batch_policy, batch_value = self.model(batch_old_policies,batch_states,batch_returns)
+                
+                batch_policy, batch_value = self.model(
+                    batch_states,
+                    batch_old_policies,
+                    batch_rtg,
+                    batch_timesteps
+                )
+
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
-                old_action_probs = batch_old_policies.gather(1, batch_actions.unsqueeze(1))
-                ratio = action_probs / (old_action_probs + 1e-6)
+                old_action_probs = batch_old_policies[torch.arange(batch_timesteps.size()[0],device=device),batch_timesteps.argmax(dim=-1)].gather(1, batch_actions.unsqueeze(1))
+                ratio = action_probs / (old_action_probs + 1e-4)
+                print(ratio.max())
                 clipped_ratio = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps)
                 surrogate1 = ratio * batch_advantages.unsqueeze(1)
                 surrogate2 = clipped_ratio * batch_advantages.unsqueeze(1)
                 policy_loss = -torch.min(surrogate1, surrogate2).mean()
                 # Calculate value function loss
-                value_loss = F.mse_loss(batch_value.squeeze(), batch_returns) * self.value_weight
+                value_loss = F.mse_loss(batch_value.squeeze(-1), batch_returns) * self.value_weight
 
                 # Calculate entropy bonus
                 entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(dim=-1).mean()
@@ -123,7 +132,7 @@ class PPOAgent:
 
 
                 loss = policy_loss + value_loss + entropy_loss
-                if False:
+                if True:
                     print("--------")
                     print(batch_actions.max())
                     print(batch_actions.min())
@@ -133,7 +142,6 @@ class PPOAgent:
                     print(batch_old_policies.min())
                     print(batch_returns.max())
                     print(batch_returns.min())
-                    print(torch.topk(batch_policy,4).values)
                     print(batch_policy.min())
                     print(entropy_loss.item(),value_loss.item(),policy_loss.item(),loss)
                     print(batch_states.max())
@@ -228,78 +236,98 @@ class DecisionTransformerAC(nn.Module):
                 dim_feedforward=128,
                 nhead=4,
                 batch_first=True,
-                device=device
+                device=device,
+                dtype=UNIT
             ),
             num_layers=3,
             norm=None,
         ) #FIXME:
 
 
-        conv_out_size = lin_size(kernel_sizes,state_dim) * conv_sizes[-1]
-        conv_out_size = 143424 # FIXME:
-        self.embed_timestep = nn.Embedding(max_ep_len, hidden_size,device=device)
-        self.embed_return = torch.nn.Linear(1, hidden_size,device=device)
-        self.embed_policy = torch.nn.Linear(act_dim, hidden_size,device=device)
+
+        self.dim_embed = hidden_size #FIXME:
+
+        self.embed_timestep = nn.Embedding(max_ep_len, hidden_size,device=device,dtype=UNIT)
+        self.embed_return = torch.nn.Linear(1, hidden_size,device=device,dtype=UNIT)
+        self.embed_policy = torch.nn.Linear(act_dim, hidden_size,device=device,dtype=UNIT)
         self.embed_state = nn.Sequential(
             Conv3to2d(kernel_sizes[0],
                       1,
                       conv_sizes[0],
                       device
                       ),
-            nn.Conv2d(conv_sizes[0],conv_sizes[1],kernel_sizes[1],device=device),
-            nn.Conv2d(conv_sizes[1],conv_sizes[2],kernel_sizes[2],device=device),
+            nn.Conv2d(conv_sizes[0],conv_sizes[1],kernel_sizes[1],device=device,dtype=UNIT),
+            nn.Conv2d(conv_sizes[1],conv_sizes[2],kernel_sizes[2],device=device,dtype=UNIT),
             nn.AdaptiveAvgPool2d(1),
             View((conv_sizes[-1],-1)),
-            nn.Linear(conv_sizes[-1],hidden_size,device=device)
+            nn.Linear(conv_sizes[-1],hidden_size,device=device,dtype=UNIT)
         )
         
 
-        self.embed_ln = nn.LayerNorm(hidden_size,device=device)
+        self.embed_ln = nn.LayerNorm(hidden_size,device=device,dtype=UNIT)
 
         # note: we don't predict states or returns for the paper
         # self.predict_state = torch.nn.Linear(hidden_size, self.state_dim)
         # self.predict_return = torch.nn.Linear(hidden_size, 1)
 
         self.policy_head = nn.Sequential(
-            nn.Linear(hidden_size, act_dim,device=device),
-            nn.Tanh()
+            nn.Linear(hidden_size, act_dim,device=device,dtype=UNIT),
+            SoftmaxStable()
         )
         self.value_head = nn.Sequential(
-            nn.Linear(hidden_size, 1,device=device)
+            nn.Linear(hidden_size, 1,device=device,dtype=UNIT)
         )
 
 
     def forward(self, states, policy, returns_to_go, timesteps, attention_mask=None):
         
-
-        batch_size, seq_length = states.shape[0], states.shape[1]
+        if states.size()[1] != 1:
+            batch_size, seq_length = states.shape[0], states.shape[1]
+            states_ = rearrange(states,'b ep h w d -> (b ep) h w d').unsqueeze(1)
+            returns_to_go_ = rearrange(returns_to_go,'b ep -> (b ep)').unsqueeze(1)
+            policy_ = rearrange(policy,'b ep a -> (b ep) a')
+            timesteps_ = rearrange(timesteps,'b ep -> (b ep)')
+        else:
+            batch_size, seq_length = 1, states.shape[0]
+            states_ = states
+            policy_ = policy
+            returns_to_go_ = returns_to_go
+            timesteps_ = timesteps
 
         if attention_mask is None:
             # attention mask for GPT: 1 if can be attended to, 0 if not
             attention_mask = torch.ones((batch_size, seq_length), dtype=torch.long)
-
-        # embed each modality with a different head
-        state_embeddings = self.embed_state(states)
-        policy_embeddings = self.embed_policy(policy.float())
-        returns_embeddings = self.embed_return(returns_to_go)
-        time_embeddings = self.embed_timestep(timesteps)
-
-        # time embeddings are treated similar to positional embeddings
         
+        
+        # embed each modality with a different head
+        state_embeddings = self.embed_state(states_)
+        
+        policy_embeddings = self.embed_policy(policy_.to(UNIT))
+        returns_embeddings = self.embed_return(returns_to_go_)
+        time_embeddings = self.embed_timestep(timesteps_)
+
+
+        if states.size()[1] != 1:
+            state_embeddings = rearrange(state_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
+            policy_embeddings = rearrange(policy_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
+            returns_embeddings = rearrange(returns_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
+            time_embeddings = rearrange(time_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
+
+
         state_embeddings = state_embeddings + time_embeddings
         policy_embeddings = policy_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
-
         # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
         # which works nice in an autoregressive sense since states predict policy
-        print(state_embeddings.size())
-        print(policy_embeddings.size())
-        print(returns_embeddings.size())
         stacked_inputs = torch.stack(
             (returns_embeddings, state_embeddings, policy_embeddings), dim=1
-        )#.reshape(batch_size, 3*seq_length, self.hidden_size)
-        print(stacked_inputs.size())
+        )
+        
         # FIXME: st.permute(0, 2, 1, 3).reshape(batch_size, 3*seq_length, self.hidden_size)
+        # if states.size()[1] != 1:
+        stacked_inputs = stacked_inputs.reshape(batch_size, 3*seq_length, self.hidden_size)
+
+            
         stacked_inputs = self.embed_ln(stacked_inputs)
 
         # to make the attention mask fit the stacked inputs, have to stack it as well
@@ -313,15 +341,16 @@ class DecisionTransformerAC(nn.Module):
             tgt=stacked_inputs,
         )
 
-        x = transformer_outputs
+        x = transformer_outputs.reshape(batch_size, 3, seq_length, self.dim_embed)
 
         # reshape x so that the second dimension corresponds to the original
         # returns (0), states (1), or policy (2); i.e. x[:,1,t] is the token for s_t
-        x = x.reshape(batch_size, seq_length, 3, self.hidden_size).permute(0, 2, 1, 3)
+        # x =
 
         # get predictions
-        policy_preds = self.policy_head(x[:,1])  # predict next policy given state
-        value_preds = self.value_head(x[:,1])
+        policy_preds = self.policy_head(x[:,2,-1,:])  # predict next policy given state
+        value_preds = self.value_head(x[:,2,-1,:])
+
 
         return policy_preds, value_preds
 
@@ -333,19 +362,9 @@ class DecisionTransformerAC(nn.Module):
         timesteps = sequence_buf['timesteps']
         states.unsqueeze_(1)
 
-        print(states.size())
-        print(policies.size())
-        print(returns_to_go.size())
-        print(timesteps.size())
-        print("----------")
-
         policy_preds, value_preds = self.forward(
             states, policies, returns_to_go, timesteps, attention_mask=None)
         
-        print(policy_preds.size())
-        print(value_preds.size())
-
-
         return policy_preds[0,-1], value_preds[0,-1]
     
 

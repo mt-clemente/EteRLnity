@@ -52,29 +52,26 @@ class EpisodeBuffer:
 
     def get_lastk(self,step:int,k:int = None):#FIXME: add padding
         if k is None:
-            k = self.ptr+1
+            k = self.ptr
 
         policy_SOS = torch.zeros_like(self.policy_buf[0]).unsqueeze(0) - 1
         states_SOS = torch.zeros_like(self.state_buf[0]).unsqueeze(0) - 1
         returns_to_go_SOS = torch.zeros_like(self.rew_buf[0]).unsqueeze(0) - 1
-        print('a,',returns_to_go_SOS.size())
         if step == 0:
             return {
-                'policies':policy_SOS,
-                'states':states_SOS,
-                'returns_to_go':returns_to_go_SOS.unsqueeze(0),
+                'policies':policy_SOS.to(UNIT),
+                'states':states_SOS.to(UNIT),
+                'returns_to_go':returns_to_go_SOS.unsqueeze(0).to(UNIT),
                 'timesteps':torch.tensor(0,device='cuda' if torch.cuda.is_available() else 'cpu')
             }
 
         policy = torch.vstack((policy_SOS ,self.policy_buf[:k]))
         states = torch.vstack((states_SOS ,self.state_buf[:k]))
-        print(returns_to_go_SOS.size())
-        print(self.rew_buf[:k].unsqueeze(-1).size())
         returns_to_go = torch.vstack((returns_to_go_SOS ,self.rew_buf[:k].unsqueeze(-1)))
         return {
-            'policies':policy,
-            'states':states,
-            'returns_to_go':returns_to_go,
+            'policies':policy.to(UNIT),
+            'states':states.to(UNIT),
+            'returns_to_go':returns_to_go.to(UNIT),
             'timesteps':torch.arange(k+1,device='cuda' if torch.cuda.is_available() else 'cpu')
         }
         
@@ -100,48 +97,42 @@ class BatchMemory:
     def load(self,buff:EpisodeBuffer,step:int):
         b_dict = buff.get_lastk(step)
 
-        print("------------------------------>",b_dict['states'].size())
         # pad for the unfinished trajectories
         if step < self.ep_length:
-            self.state_buf[self.ptr] = torch.vstack((b_dict['states'],torch.zeros((self.ep_length-step-1,*b_dict['states'].size()[1:]),device=self.device)))
-            self.policy_buf[self.ptr] = torch.vstack((b_dict['policies'],torch.zeros((self.ep_length-step-1,*b_dict['policies'].size()[1:]),device=self.device)))
-            self.rew_buf[self.ptr] = torch.hstack((b_dict['returns_to_go'].squeeze(-1),torch.zeros((self.ep_length-step-1),device=self.device)))
+            self.state_buf[self.ptr] = torch.vstack((b_dict['states'],torch.zeros((self.ep_length-step,*b_dict['states'].size()[1:]),device=self.device)))
+            self.policy_buf[self.ptr] = torch.vstack((b_dict['policies'],torch.zeros((self.ep_length-step,*b_dict['policies'].size()[1:]),device=self.device)))
+            self.rew_buf[self.ptr] = torch.hstack((b_dict['returns_to_go'].squeeze(-1),torch.zeros((self.ep_length-step),device=self.device)))
         else:
             self.state_buf[self.ptr] = b_dict['states']
             self.policy_buf[self.ptr] = b_dict['policies']
-            self.rew_buf[self.ptr] = b_dict['returns_to_go']
+            self.rew_buf[self.ptr] = b_dict['returns_to_go'].squeeze(-1)
 
-        self.act_buf[self.ptr] = buff.act_buf
-        self.value_buf[self.ptr] = buff.value_buf
-        self.next_value_buf[self.ptr] = buff.next_value_buf
-        self.final_buf[self.ptr] = buff.final_buf
-        # self.act_buf[self.ptr] = buff.act_buf
-        # self.state_buf[self.ptr] = buff.state_buf
-        # self.policy_buf[self.ptr] = buff.policy_buf
-        # self.value_buf[self.ptr] = buff.value_buf
-        # self.next_value_buf[self.ptr] = buff.next_value_buf
-        # self.final_buf[self.ptr] = buff.final_buf
-        # self.rew_buf[self.ptr] = buff.rew_buf
+        self.timestep_buff[self.ptr] = buff.ptr - 1
+        self.act_buf[self.ptr] = buff.act_buf[buff.ptr - 1]
+        self.value_buf[self.ptr] = buff.value_buf[buff.ptr - 1]
+        self.next_value_buf[self.ptr] = buff.next_value_buf[buff.ptr - 1]
+        self.final_buf[self.ptr] = buff.final_buf[buff.ptr - 1]
 
         self.ptr += 1
-    
-    
+
+
     def reset(self):
 
         if self.ptr != self.capacity:
             print(self.ptr)
             print(Warning(f'Memory not full : {self.ptr}/{self.capacity}'))
         self.state_buf = torch.empty((self.capacity,self.ep_length+1,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device)
-        self.act_buf = torch.empty((self.capacity,self.ep_length),dtype=int,device=self.device)
+        self.act_buf = torch.empty((self.capacity),dtype=int,device=self.device)
         self.policy_buf = torch.empty((self.capacity,self.ep_length+1,self.n_tiles),device=self.device)
-        self.value_buf = torch.empty((self.capacity,self.ep_length),device=self.device)
-        self.next_value_buf = torch.empty((self.capacity,self.ep_length),device=self.device)
+        self.value_buf = torch.empty((self.capacity),device=self.device)
+        self.next_value_buf = torch.empty((self.capacity),device=self.device)
         self.rew_buf = torch.empty((self.capacity,self.ep_length+1),device=self.device)
-        self.final_buf = torch.empty((self.capacity,self.ep_length),dtype=int,device=self.device)
+        self.timestep_buff = torch.empty((self.capacity),dtype=int,device=self.device)
+        self.final_buf = torch.empty((self.capacity),dtype=int,device=self.device)
         self.ptr = 0
 
     def __getitem__(self,key):
-        return getattr(self,key)[:self.ptr+1]
+        return getattr(self,key)[:self.ptr]
 
 
 
