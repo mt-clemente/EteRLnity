@@ -7,8 +7,6 @@ from einops import rearrange, repeat
 from eternity import EternityPuzzle
 from param import *
 
-from init_solver import init_boost_conflicts
-
 
 # -------------------- UTILS --------------------
 
@@ -26,9 +24,7 @@ def initialize_sol(instance_file:str, device):
 
     pz = EternityPuzzle(instance_file)
     n_tiles = len(pz.piece_list)
-    tiles = torch.tensor(pz.piece_list,device=device).repeat(4,1)
-    for dir in range(3):
-        tiles[dir*n_tiles:(dir+1)*n_tiles] = tiles[dir*n_tiles:(dir+1)*n_tiles].roll(dir+1,1)
+    tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device)
     return torch.zeros((pz.board_size+2,pz.board_size+2,4*COLOR_ENCODING_SIZE),device=device), tiles, n_tiles
 
 
@@ -46,12 +42,6 @@ def pprint(state,bsize):
         
 
 
-def place_tile(state:Tensor,tile:Tensor,step:int):
-    state = state.clone()
-    bsize = state.size()[0] - 2
-    state[step // bsize + 1, step % bsize + 1,:] = tile
-    return state
-
 
 def ucb(q,count,step):
 
@@ -62,7 +52,7 @@ def binary(x: Tensor, bits):
     return x.unsqueeze(-1).bitwise_and(mask).ne(0).to(UNIT)
 
 
-def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tensor:
+def to_tensor(list_sol:list, encoding = ENCODING,gray_borders:bool=False) -> Tensor:
     """
     Converts solutions from list format to a torch Tensor.
     Tensor format:
@@ -103,91 +93,86 @@ def to_tensor(list_sol:list, encoding = 'binary',gray_borders:bool=True) -> Tens
                     sol.append(tile)
                     list_sol.pop(i)
                     break
-
+    else:
+        sol = list_sol
     b_size = int(len(sol)**0.5)
 
     if encoding == 'binary':
         color_enc_size = ceil(torch.log2(torch.tensor(N_COLORS)))
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((b_size,b_size,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         # Tiles around the board
         # To make sure the policy learns that the gray tiles are always one the border,
         # the reward for connecting to those tiles is bigger.
         tens[0,:,color_enc_size:2*color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
         tens[:,0,2*color_enc_size:color_enc_size*3] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[MAX_BSIZE+1,:,:color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[:,MAX_BSIZE+1,3*color_enc_size:] = binary(torch.tensor(GRAY),color_enc_size)
+        tens[b_size-1,:,:color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
+        tens[:,b_size-1,3*color_enc_size:] = binary(torch.tensor(GRAY),color_enc_size)
 
 
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE + 2 - b_size) // 2
         #one hot encode the colors
-        for i in range(offset, offset + b_size):
-            for j in range(offset, offset + b_size):
+        for i in range(b_size):
+            for j in range(b_size):
 
                 tens[i,j,:] = 0
 
                 for d in range(4):
                     dir = orientation[d]
-                    tens[i,j, d * color_enc_size:(d+1) * color_enc_size] = binary(torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir]),color_enc_size)
+                    tens[i,j, d * color_enc_size:(d+1) * color_enc_size] = binary(torch.tensor(sol[i * b_size + j][dir]),color_enc_size)
 
     elif encoding == 'ordinal':
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((b_size,b_size,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         # Tiles around the board
         # To make sure the policy learns that the gray tiles are always one the border,
         # the reward for connecting to those tiles is bigger.
         tens[0,:,1] = 0
         tens[:,0,2] = 0
-        tens[MAX_BSIZE+1,:,0] = 0
-        tens[:,MAX_BSIZE+1,3] = 0
+        tens[b_size-1,:,0] = 0
+        tens[:,b_size-1,3] = 0
 
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
         #one hot encode the colors
-        for i in range(offset, offset + b_size):
-            for j in range(offset, offset + b_size):
+        for i in range(b_size):
+            for j in range(b_size):
 
                 tens[i,j,:] = 0
 
                 for d in range(4):
                     dir = orientation[d]
-                    tens[i,j,d] = torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir])
+                    tens[i,j,d] = torch.tensor(sol[i * b_size + j][dir])
         
         tens.unsqueeze(-1)
 
 
     else:
 
-        tens = torch.zeros((MAX_BSIZE + 2,MAX_BSIZE + 2,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+        tens = torch.zeros((b_size,b_size,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
 
         tens[0,:,N_COLORS + GRAY] = 1
         tens[:,0,N_COLORS * 2 + GRAY] = 1
-        tens[MAX_BSIZE+1,:,GRAY] = 1
-        tens[:,MAX_BSIZE+1,N_COLORS * 3 + GRAY] = 1
+        tens[b_size-1,:,GRAY] = 1
+        tens[:,b_size-1,N_COLORS * 3 + GRAY] = 1
 
 
         # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
         #one hot encode the colors
-        for i in range(0,MAX_BSIZE+2):
-            for j in range(0,MAX_BSIZE+2):
+        for i in range(b_size):
+            for j in range(b_size):
 
-                if i >= offset and i < offset+b_size and j >= offset and j < offset+b_size:
+                if i >= 0 and i < b_size and j >= 0 and j < b_size:
                     tens[i,j,:] = 0
 
                     for d in range(4):
                         dir = orientation[d]
-                        tens[i,j, d * N_COLORS + sol[(i - offset) * b_size + (j-offset)][dir]] = 1
+                        tens[i,j, d * N_COLORS + sol[i * b_size + j][dir]] = 1
                     
                 else:
                     for dir in range(4):
                         tens[i,j, orientation[dir] * N_COLORS] = 1
-                    
-
-            
         
 
     return tens
@@ -219,7 +204,7 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
 
     sol.int()
 
-    offset = (MAX_BSIZE + 2 - bsize) // 2
+    offset = 1
 
     if ENCODING == 'binary':
 

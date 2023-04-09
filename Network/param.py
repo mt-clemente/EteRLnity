@@ -28,9 +28,12 @@ N_COLORS = 23
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-
-HIDDEN_SIZES = [512,256]
-KERNEL_SIZES = [3,2]
+GAE_LAMBDA = 0.988
+ENTROPY_WEIGHT = 0.01
+VALUE_WEIGHT = .5
+CONV_SIZES = [32,64,128]
+KERNEL_SIZES = [3,4,5]
+HIDDEN_SIZE = 128
 
 # -------------------- TRAINING SETTINGS -------------------- 
 UNIT = torch.float
@@ -46,17 +49,18 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 20
-CHECKPOINT_PERIOD = 10000
-BATCH_SIZE = 64
+EPOCHS = 10
+CHECKPOINT_PERIOD = 256*200
+MINIBATCH_SIZE = 64
+HORIZON = 2 * 256
 OPT_EPSILON = 1e-6
-LR = 1e-6
-GAMMA = 0.92
-CLIP_RATIO = 0.2
+LR = 6e-5
+GAMMA = 0.95
+CLIP_EPS = 0.2
 
 CONFIG = {
     'encoding':ENCODING,
     'unit':UNIT,
-    'Batch size':BATCH_SIZE,
+    'Batch size':MINIBATCH_SIZE,
     'Gamma':GAMMA,
 }
