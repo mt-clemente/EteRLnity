@@ -18,7 +18,8 @@ class EpisodeBuffer:
         self.ep_length = n_tiles
         self.device = device
         self.state_buf = torch.zeros((capacity,bsize,bsize,4*COLOR_ENCODING_SIZE),device=self.device)
-        self.act_buf = torch.zeros((capacity),dtype=int,device=self.device)
+        # Actions correspond to idx 0...n_tiles-1, n_tiles is a padding value
+        self.act_buf = torch.zeros((capacity),dtype=int,device=self.device) + n_tiles 
         self.policy_buf = torch.zeros((capacity,n_tiles),device=self.device)
         self.value_buf = torch.zeros((capacity),device=self.device)
         self.next_value_buf = torch.zeros((capacity),device=self.device)

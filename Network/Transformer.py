@@ -83,6 +83,11 @@ class PPOAgent:
         timestep_seq = repeat(torch.arange(ep_length-1,device=mem.device),'a -> b a',b = batch_size)
         timestep_seq[timestep_seq > repeat(mem['timestep_buff'],'b -> b e',e=ep_length-1)] = 0
 
+        print(mem['state_buf'][:,1:].size())
+        print(mem['state_buf'][:,1:].size())
+        print(mem['act_buf'].size())
+        print(mem['rew_buf'][:,1:].size())
+        print(mem['policy_buf'][:,1:].size())
         dataset = TensorDataset(
             mem['state_buf'][:,1:],
             mem['act_buf'],
@@ -106,6 +111,8 @@ class PPOAgent:
 
                 # Calculate new policy and value estimates
                 
+
+
                 batch_policy, batch_value = self.model(
                     batch_states,
                     batch_old_policies,
@@ -185,20 +192,14 @@ def init_weights(m):
 # self.critic.apply(init_weights)
 # self.actor.apply(init_weights)
 
-def lin_size(kernel_sizes, dim, strides=None):
+def lin_size(dim,k, stride=None):
 
     size = dim
 
-    if strides is None:
-        strides = [1] * len(kernel_sizes)
+    if stride is None:
+        stride = 1
 
-    for ks,st in zip(kernel_sizes,strides):
-        
-        try:
-            size = (size - ks) // st + 1
-        except:
-            size = (size - ks[0]) // st + 1
-
+    size = (size - k) // stride + 1
 
     return size
 
@@ -220,20 +221,20 @@ class DecisionTransformerAC(nn.Module):
             kernel_sizes,
             device,
             max_length=None,
-            max_ep_len=256,
     ):
         super().__init__()
         self.state_dim = state_dim
         self.act_dim = act_dim
         self.hidden_size = hidden_size
         self.max_length = max_length
+        self.seq_length = (state_dim-2)**2
 
         # note: the only difference between this GPT2Model and the default Huggingface version
         # is that the positional embeddings are removed (since we'll add those ourselves)
         self.transformer = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(
-                d_model=128,
-                dim_feedforward=128,
+                d_model=self.hidden_size,
+                dim_feedforward=self.hidden_size,
                 nhead=4,
                 batch_first=True,
                 device=device,
@@ -247,20 +248,26 @@ class DecisionTransformerAC(nn.Module):
 
         self.dim_embed = hidden_size #FIXME:
 
-        self.embed_timestep = nn.Embedding(max_ep_len, hidden_size,device=device,dtype=UNIT)
+        h = lin_size(state_dim,kernel_sizes[0])
+        w = lin_size(state_dim,kernel_sizes[0]) * lin_size(4 * COLOR_ENCODING_SIZE,kernel_sizes[0])
+        h = (h-kernel_sizes[1] + 1 - kernel_sizes[2] + 1)
+        w = (w-kernel_sizes[1] + 1 - kernel_sizes[2]) // 3 + 1
+        lin_sz = h*w * conv_sizes[2]
+
+
+        self.embed_timestep = nn.Embedding(self.seq_length, hidden_size,device=device,dtype=UNIT)
         self.embed_return = torch.nn.Linear(1, hidden_size,device=device,dtype=UNIT)
-        self.embed_policy = torch.nn.Linear(act_dim, hidden_size,device=device,dtype=UNIT)
+        self.embed_actions = torch.nn.Linear(1, hidden_size,device=device,dtype=UNIT)
         self.embed_state = nn.Sequential(
             Conv3to2d(kernel_sizes[0],
                       1,
                       conv_sizes[0],
                       device
                       ),
-            nn.Conv2d(conv_sizes[0],conv_sizes[1],kernel_sizes[1],device=device,dtype=UNIT),
+            nn.Conv2d(conv_sizes[0],conv_sizes[1],kernel_sizes[1],stride=(1,3),device=device,dtype=UNIT),
             nn.Conv2d(conv_sizes[1],conv_sizes[2],kernel_sizes[2],device=device,dtype=UNIT),
-            nn.AdaptiveAvgPool2d(1),
-            View((conv_sizes[-1],-1)),
-            nn.Linear(conv_sizes[-1],hidden_size,device=device,dtype=UNIT)
+            nn.AdaptiveAvgPool2d((self.seq_length,1)),
+            View((-1,self.seq_length,self.dim_embed)),
         )
         
 
@@ -279,53 +286,45 @@ class DecisionTransformerAC(nn.Module):
         )
 
 
-    def forward(self, states, policy, returns_to_go, timesteps, attention_mask=None):
+    def forward(self, states, actions, returns_to_go, timesteps, attention_mask=None):
         
-        if states.size()[1] != 1:
-            batch_size, seq_length = states.shape[0], states.shape[1]
-            states_ = rearrange(states,'b ep h w d -> (b ep) h w d').unsqueeze(1)
-            returns_to_go_ = rearrange(returns_to_go,'b ep -> (b ep)').unsqueeze(1)
-            policy_ = rearrange(policy,'b ep a -> (b ep) a')
-            timesteps_ = rearrange(timesteps,'b ep -> (b ep)')
-        else:
-            batch_size, seq_length = 1, states.shape[0]
+
+        if states.dim() == 5:
+            batch_size = states.shape[0]
             states_ = states
-            policy_ = policy
             returns_to_go_ = returns_to_go
+            actions_ = actions
             timesteps_ = timesteps
+        else:
+            batch_size = 1
+            states_ = states.unsqueeze(0).unsqueeze(1)
+            actions_ = actions.unsqueeze(-1).unsqueeze(0)
+            returns_to_go_ = returns_to_go.unsqueeze(-1).unsqueeze(0)
+            timesteps_ = timesteps.unsqueeze(0)
 
         if attention_mask is None:
             # attention mask for GPT: 1 if can be attended to, 0 if not
-            attention_mask = torch.ones((batch_size, seq_length), dtype=torch.long)
+            attention_mask = torch.ones((batch_size, self.seq_length), dtype=torch.long)
         
         
         # embed each modality with a different head
         state_embeddings = self.embed_state(states_)
-        
-        policy_embeddings = self.embed_policy(policy_.to(UNIT))
+    
+        actions_embeddings = self.embed_actions(actions_.to(UNIT))
         returns_embeddings = self.embed_return(returns_to_go_)
         time_embeddings = self.embed_timestep(timesteps_)
 
-
-        if states.size()[1] != 1:
-            state_embeddings = rearrange(state_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
-            policy_embeddings = rearrange(policy_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
-            returns_embeddings = rearrange(returns_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
-            time_embeddings = rearrange(time_embeddings,'(b ep) e -> b ep e',b=batch_size,e=self.dim_embed)
-
-
         state_embeddings = state_embeddings + time_embeddings
-        policy_embeddings = policy_embeddings + time_embeddings
+        actions_embeddings = actions_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
         # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
-        # which works nice in an autoregressive sense since states predict policy
+        # which works nice in an autoregressive sense since states predict actions
         stacked_inputs = torch.stack(
-            (returns_embeddings, state_embeddings, policy_embeddings), dim=1
+            (returns_embeddings, state_embeddings, actions_embeddings), dim=1
         )
         
-        # FIXME: st.permute(0, 2, 1, 3).reshape(batch_size, 3*seq_length, self.hidden_size)
-        # if states.size()[1] != 1:
-        stacked_inputs = stacked_inputs.reshape(batch_size, 3*seq_length, self.hidden_size)
+        stacked_inputs = rearrange(stacked_inputs,'b c s e -> b (c s) e')
+        stacked_inputs = stacked_inputs.reshape(batch_size, 3*self.seq_length, self.hidden_size)
 
             
         stacked_inputs = self.embed_ln(stacked_inputs)
@@ -333,7 +332,7 @@ class DecisionTransformerAC(nn.Module):
         # to make the attention mask fit the stacked inputs, have to stack it as well
         # stacked_attention_mask = torch.stack(
         # (attention_mask, attention_mask, attention_mask), dim=1
-        # ).permute(0, 2, 1).reshape(batch_size, 3*seq_length)
+        # ).permute(0, 2, 1).reshape(batch_size, 3*self.seq_length)
 
         # we feed in the input embeddings (not word indices as in NLP) to the model
         transformer_outputs = self.transformer(
@@ -341,31 +340,26 @@ class DecisionTransformerAC(nn.Module):
             tgt=stacked_inputs,
         )
 
-        x = transformer_outputs.reshape(batch_size, 3, seq_length, self.dim_embed)
+        x = transformer_outputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
 
         # reshape x so that the second dimension corresponds to the original
-        # returns (0), states (1), or policy (2); i.e. x[:,1,t] is the token for s_t
+        # returns (0), states (1), or actions (2); i.e. x[:,1,t] is the token for s_t
         # x =
 
         # get predictions
-        policy_preds = self.policy_head(x[:,2,-1,:])  # predict next policy given state
+        policy_preds = self.policy_head(x[:,2,-1,:])  # predict next actions given state
         value_preds = self.value_head(x[:,2,-1,:])
 
 
         return policy_preds, value_preds
 
-    def get_action(self, sequence_buf:dict):
+    def get_action(self, state,policy,return_to_go,timestep):
         # we don't care about the past rewards in this model
-        states = sequence_buf['states']
-        policies = sequence_buf['policies']
-        returns_to_go = sequence_buf['returns_to_go']
-        timesteps = sequence_buf['timesteps']
-        states.unsqueeze_(1)
 
         policy_preds, value_preds = self.forward(
-            states, policies, returns_to_go, timesteps, attention_mask=None)
+            state, policy, return_to_go, timestep, attention_mask=None)
         
-        return policy_preds[0,-1], value_preds[0,-1]
+        return policy_preds, value_preds
     
 
 
@@ -378,7 +372,7 @@ class Conv3to2d(nn.Module):
         self.conv = nn.Conv3d(
             in_channels=input_channels,
             out_channels=layer_size,
-            kernel_size= (kernel_size,kernel_size,5),
+            kernel_size= (kernel_size,kernel_size,kernel_size),
             dtype=UNIT,
             device=device,
             )
@@ -396,7 +390,7 @@ class View(nn.Module):
         self.shape = shape
 
     def forward(self, input):
-        return rearrange(input,'b c h w -> b (c h w)')
+        return input.view(self.shape)
 
 class SoftmaxStable(nn.Module):
     def forward(self, x):

@@ -27,7 +27,7 @@ def train_model(hotstart:str = None):
     n_tiles = len(pz.piece_list)
     bsize = pz.board_size
     hotstart = args.hotstart
-    # torch.cuda.is_available = lambda : False
+    torch.cuda.is_available = lambda : False
     
     # -------------------- GAME INIT --------------------
 
@@ -126,9 +126,14 @@ def train_model(hotstart:str = None):
             while not episode_end:
 
                 print(step)
-                trajectory = ep_buf.get_lastk(ep_step)#FIXME: Seq len
+
                 with torch.no_grad():
-                    policy, value = agent.model.get_action(trajectory)
+                    policy, value = agent.model.get_action(
+                        state,
+                        ep_buf.act_buf,
+                        ep_buf.rew_buf,
+                        torch.tensor(ep_step,device=device),
+                        )
 
                 selected_tile_idx = agent.get_action(policy,mask)
                 selected_tile = remaining_tiles[selected_tile_idx]
