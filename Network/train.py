@@ -27,28 +27,17 @@ def train_model(hotstart:str = None):
     n_tiles = len(pz.piece_list)
     bsize = pz.board_size
     hotstart = args.hotstart
-    torch.cuda.is_available = lambda : False
+    # torch.cuda.is_available = lambda : False
     
     # -------------------- GAME INIT --------------------
 
     # -------------------- NETWORK INIT -------------------- 
 
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and False: #FIXME:
         device = 'cuda'
     else:
         device = 'cpu'
 
-
-    Transition = namedtuple('Transition',
-                            ('state',
-                            'next_state',
-                            'reward',
-                            'action',
-                            'final',
-                            'weights',
-                            'indices'
-                            )
-                           )
 
 
     cfg = {
@@ -57,12 +46,13 @@ def train_model(hotstart:str = None):
     'clip_eps' : CLIP_EPS ,
     'lr' : LR ,
     'epochs' : EPOCHS ,
-    'minibatch_size' : MINIBATCH_SIZE ,
+    'minibatch_size' : MINIBATCH_SIZE,
     'horizon' : HORIZON * n_tiles,
     'state_dim' : bsize+2,
-    'conv_sizes': CONV_SIZES,
+    'n_layers':N_LAYERS,
+    'n_heads':N_HEADS,
+    'dim_embed': DIM_EMBED,
     'hidden_size':HIDDEN_SIZE,
-    'kernel_sizes': KERNEL_SIZES,
     'entropy_weight':ENTROPY_WEIGHT,
     'value_weight':VALUE_WEIGHT,
     'gae_lambda':GAE_LAMBDA,
@@ -77,19 +67,19 @@ def train_model(hotstart:str = None):
     memory = BatchMemory(
         n_tiles=n_tiles,
         bsize=bsize+2,
-        ep_length=bsize**2,
-        capacity=HORIZON*n_tiles,
+        ep_length=n_tiles,
+        capacity=HORIZON,
         device=device
     )
 
     ep_buf = EpisodeBuffer(
-        capacity=n_tiles,
+        ep_len=n_tiles,
         n_tiles=n_tiles,
         bsize=bsize+2,
         device=device
     )
 
-    max_entropy = torch.log2(torch.tensor(MAX_BSIZE**2))
+    max_entropy = torch.log2(torch.tensor(n_tiles))
     policy_entropy = max_entropy
 
     # -------------------- TRAINING LOOP --------------------
@@ -121,17 +111,18 @@ def train_model(hotstart:str = None):
             ep_start = step
             ep_step = 0
             reward_to_go = n_tiles * 4 # approx 2*max_reward
+            ep_buf.rew_buf[0] = reward_to_go
 
 
             while not episode_end:
 
-                print(step)
+                seq = ep_buf.get_lastk(ep_step)
 
                 with torch.no_grad():
                     policy, value = agent.model.get_action(
                         state,
-                        ep_buf.act_buf,
-                        ep_buf.rew_buf,
+                        seq['actions'][:-1],
+                        seq['returns_to_go'][:-1],
                         torch.tensor(ep_step,device=device),
                         )
 
@@ -142,14 +133,15 @@ def train_model(hotstart:str = None):
 
                 conflicts += new_conf
 
-                if new_conf == 0:
-                    consec_good_moves += 1
-                    reward = streak(consec_good_moves,n_tiles)
-                else:
-                    consec_good_moves = 0
-                    reward = - 1
+                # if new_conf == 0:
+                #     consec_good_moves += 1
+                #     reward = streak(consec_good_moves,n_tiles)
+                # else:
+                #     consec_good_moves = 0
+                #     reward = - 1
+                reward = 2 - new_conf
                 
-                reward_to_go -= new_conf
+                reward_to_go -= reward
 
                 ep_reward += reward
 
@@ -161,6 +153,7 @@ def train_model(hotstart:str = None):
                         policy=move_buffer.policy,
                         value=move_buffer.value,
                         next_value=value,
+                        reward=move_buffer.reward,
                         reward_to_go=move_buffer.reward_to_go,
                         final=0
                     )
@@ -170,7 +163,7 @@ def train_model(hotstart:str = None):
                         ep_step
                     )
 
-
+                
                 if ep_step == n_tiles-1:
 
                     # pz.display_solution(to_list(new_state,bsize),f"{step}")
@@ -180,6 +173,7 @@ def train_model(hotstart:str = None):
                         policy=policy,
                         value=value,
                         next_value=0,
+                        reward=reward,
                         reward_to_go=reward_to_go,
                         final=1
                     )
@@ -187,13 +181,25 @@ def train_model(hotstart:str = None):
                         ep_buf,
                         ep_step+1
                     )
-                    if episode % 10 == 0:
+                    
+
+                    # Compute the advantages once the epsiode is done.
+                    ep_buf.compute_gae(agent.gamma,agent.gae_lambda)
+                    memory.load_advantages(ep_buf.adv_buf)
+
+                    ep_buf.reset()
+                    
+                    curr_valid_state = new_state
+
+                    if episode % 1 == 0:
                         print(f"END EPISODE {episode} - Conflicts {conflicts}/{bsize * 2 *(bsize+1)}",end='\r')
                     episode_end = True
                     episode += 1
 
                     if episode % LOG_EVERY == 0:
-                        wandb.log({"Mean episode reward":ep_reward/(step - ep_start + 1e-5),'Final conflicts':conflicts})
+                        wandb.log({
+                            "Mean episode reward":ep_reward/(step - ep_start + 1e-5),
+                            'Final conflicts':conflicts})
                     
 
                 if (step % (HORIZON * n_tiles)) == 0 and step != 0:
@@ -202,18 +208,17 @@ def train_model(hotstart:str = None):
                         mem=memory
                     )
 
-
                 
                 prev_conflicts = conflicts
                 move_buffer.state = state 
                 move_buffer.action = selected_tile_idx 
                 move_buffer.policy = policy 
                 move_buffer.value = value 
+                move_buffer.reward = reward 
                 move_buffer.reward_to_go = reward_to_go 
 
 
                 state = new_state
-
                 with torch.no_grad():
                     policy_prob = torch.softmax(policy,dim=-1).squeeze(-1)
                     policy_prob = policy_prob[policy_prob != 0]
@@ -225,7 +230,6 @@ def train_model(hotstart:str = None):
 
                     wandb.log(
                         {   
-                            'Score':conflicts,
                             'Relative policy entropy': policy_entropy/max_entropy,
                             'Value': value,
                             'Reward': reward,
@@ -258,7 +262,7 @@ def train_model(hotstart:str = None):
 
     # reporter = MemReporter(agent)
     # reporter.report()
-    print("STILL VALID :",pz.verify_solution(to_list(state,bsize)))
+    print("STILL VALID :",pz.verify_solution(to_list(curr_valid_state,bsize)))
     print(best_score)
     return 
 
@@ -364,17 +368,16 @@ def get_conflicts(state:Tensor, bsize:int, step:int = 0) -> int:
     return max_connections - total_connections
 
 
-
-
 # ----------- MAIN CALL -----------
 
 if __name__ == "__main__"  and '__file__' in globals():
 
     args = parse_arguments()
     CONFIG['Instance'] = args.instance.replace('instances/','')
-
+    torch.autograd.set_detect_anomaly(True)
     wandb.init(
         project='Eternity II',
+        entity='mateo-clemente',
         group='Decision Transformer',
         config=CONFIG
     )

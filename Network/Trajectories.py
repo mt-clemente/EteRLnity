@@ -13,18 +13,18 @@ import torch.nn.init as init
 
 
 class EpisodeBuffer:
-    def __init__(self,capacity:int, n_tiles:int,bsize:int,device) -> None:
-        self.capacity = capacity
-        self.ep_length = n_tiles
+    def __init__(self,ep_len:int, n_tiles:int,bsize:int,device) -> None:
+        self.ep_len = ep_len
         self.device = device
-        self.state_buf = torch.zeros((capacity,bsize,bsize,4*COLOR_ENCODING_SIZE),device=self.device)
-        # Actions correspond to idx 0...n_tiles-1, n_tiles is a padding value
-        self.act_buf = torch.zeros((capacity),dtype=int,device=self.device) + n_tiles 
-        self.policy_buf = torch.zeros((capacity,n_tiles),device=self.device)
-        self.value_buf = torch.zeros((capacity),device=self.device)
-        self.next_value_buf = torch.zeros((capacity),device=self.device)
-        self.rew_buf = torch.zeros((capacity),device=self.device)
-        self.final_buf = torch.zeros((capacity),dtype=int,device=self.device)
+        self.state_buf = torch.zeros((ep_len,bsize,bsize,4*COLOR_ENCODING_SIZE),device=self.device)
+        self.act_buf = torch.zeros((ep_len),dtype=int,device=self.device) - 2
+        self.policy_buf = torch.zeros((ep_len,n_tiles),device=self.device)
+        self.value_buf = torch.zeros((ep_len),device=self.device)
+        self.next_value_buf = torch.zeros((ep_len),device=self.device)
+        self.rew_buf = torch.zeros((ep_len),device=self.device)
+        self.rtg_buf = torch.zeros((ep_len+1),device=self.device)
+        self.final_buf = torch.zeros((ep_len),dtype=int,device=self.device)
+        self.adv_buf = torch.zeros((ep_len+1),device=self.device)
         self.ptr = 0
 
     def push(
@@ -34,6 +34,7 @@ class EpisodeBuffer:
             policy,
             value,
             next_value,
+            reward,
             reward_to_go,
             final
             ):
@@ -44,49 +45,49 @@ class EpisodeBuffer:
         self.policy_buf[self.ptr] = policy
         self.value_buf[self.ptr] = value
         self.next_value_buf[self.ptr] = next_value
-        self.rew_buf[self.ptr] = reward_to_go
+        self.rew_buf[self.ptr] = reward
+        self.rtg_buf[self.ptr+1] = reward_to_go
         self.final_buf[self.ptr] = final
 
         self.ptr += 1
-        if self.ptr == self.capacity:
-            self.ptr = 0
+        
+
 
     def get_lastk(self,step:int,k:int = None):#FIXME: add padding
         if k is None:
             k = self.ptr
 
-        policy_SOS = torch.zeros_like(self.policy_buf[0]).unsqueeze(0) - 1
-        states_SOS = torch.zeros_like(self.state_buf[0]).unsqueeze(0) - 1
-        returns_to_go_SOS = torch.zeros_like(self.rew_buf[0]).unsqueeze(0) - 1
-        if step == 0:
-            return {
-                'policies':policy_SOS.to(UNIT),
-                'states':states_SOS.to(UNIT),
-                'returns_to_go':returns_to_go_SOS.unsqueeze(0).to(UNIT),
-                'timesteps':torch.tensor(0,device='cuda' if torch.cuda.is_available() else 'cpu')
-            }
-
-        policy = torch.vstack((policy_SOS ,self.policy_buf[:k]))
-        states = torch.vstack((states_SOS ,self.state_buf[:k]))
-        returns_to_go = torch.vstack((returns_to_go_SOS ,self.rew_buf[:k].unsqueeze(-1)))
+        states = self.state_buf
+        actions = self.act_buf.unsqueeze(-1)
+        returns_to_go = self.rtg_buf.unsqueeze(-1)
         return {
-            'policies':policy.to(UNIT),
+            'actions':actions.to(UNIT),
             'states':states.to(UNIT),
             'returns_to_go':returns_to_go.to(UNIT),
-            'timesteps':torch.arange(k+1,device='cuda' if torch.cuda.is_available() else 'cpu')
+            'timesteps':torch.arange(k+1,device=states.device)
         }
         
+    def compute_gae(self,  gamma, gae_lambda):
+
+        if self.ptr != self.ep_len:
+            print(Warning("Computing advantages on an unfinished episode"))
+
+        td_errors = self.rew_buf + gamma * self.next_value_buf * (1 - self.final_buf) - self.value_buf
+        gae = 0
+        advantages = torch.zeros_like(td_errors)
+        for t in reversed(range(len(td_errors))):
+            gae = td_errors[t] + gamma * gae_lambda * (1 - self.final_buf[t]) * gae
+            advantages[t] = gae
+
+        self.adv_buf = advantages
+
+
     def reset(self):
-        if self.ptr != 0:
-            raise OSError(self.ptr)
-        
         self.ptr = 0
-
-
 
 class BatchMemory:
     def __init__(self,n_tiles:int,bsize:int,capacity:int=MINIBATCH_SIZE, ep_length:int=256,device='cpu') -> None:
-        self.capacity = capacity
+        self.capacity = capacity * (ep_length)
         self.ep_length = ep_length
         self.n_tiles = n_tiles
         self.device = device
@@ -99,37 +100,30 @@ class BatchMemory:
         b_dict = buff.get_lastk(step)
 
         # pad for the unfinished trajectories
-        if step < self.ep_length:
-            self.state_buf[self.ptr] = torch.vstack((b_dict['states'],torch.zeros((self.ep_length-step,*b_dict['states'].size()[1:]),device=self.device)))
-            self.policy_buf[self.ptr] = torch.vstack((b_dict['policies'],torch.zeros((self.ep_length-step,*b_dict['policies'].size()[1:]),device=self.device)))
-            self.rew_buf[self.ptr] = torch.hstack((b_dict['returns_to_go'].squeeze(-1),torch.zeros((self.ep_length-step),device=self.device)))
-        else:
-            self.state_buf[self.ptr] = b_dict['states']
-            self.policy_buf[self.ptr] = b_dict['policies']
-            self.rew_buf[self.ptr] = b_dict['returns_to_go'].squeeze(-1)
-
-        self.timestep_buff[self.ptr] = buff.ptr - 1
-        self.act_buf[self.ptr] = buff.act_buf[buff.ptr - 1]
+        self.act_buf[self.ptr] = b_dict['actions'].squeeze(-1)
+        self.rtg_buf[self.ptr] = b_dict['returns_to_go'].squeeze(-1)
+        self.state_buf[self.ptr] = buff.state_buf[buff.ptr - 1]
+        self.timestep_buf[self.ptr] = buff.ptr - 1
+        self.policy_buf[self.ptr] = buff.policy_buf[buff.ptr - 1]
         self.value_buf[self.ptr] = buff.value_buf[buff.ptr - 1]
-        self.next_value_buf[self.ptr] = buff.next_value_buf[buff.ptr - 1]
-        self.final_buf[self.ptr] = buff.final_buf[buff.ptr - 1]
 
         self.ptr += 1
+
+    def load_advantages(self,advantages):
+        self.adv_buf[self.ptr-advantages.size()[0]:self.ptr] = advantages
 
 
     def reset(self):
 
         if self.ptr != self.capacity:
-            print(self.ptr)
             print(Warning(f'Memory not full : {self.ptr}/{self.capacity}'))
-        self.state_buf = torch.empty((self.capacity,self.ep_length+1,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device)
-        self.act_buf = torch.empty((self.capacity),dtype=int,device=self.device)
-        self.policy_buf = torch.empty((self.capacity,self.ep_length+1,self.n_tiles),device=self.device)
+        self.state_buf = torch.empty((self.capacity,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device)
+        self.act_buf = torch.empty((self.capacity,self.ep_length),dtype=int,device=self.device)
+        self.policy_buf = torch.empty((self.capacity,self.n_tiles),device=self.device)
+        self.rtg_buf = torch.empty((self.capacity,self.ep_length+1),device=self.device)
+        self.adv_buf = torch.zeros((self.capacity),device=self.device)
         self.value_buf = torch.empty((self.capacity),device=self.device)
-        self.next_value_buf = torch.empty((self.capacity),device=self.device)
-        self.rew_buf = torch.empty((self.capacity,self.ep_length+1),device=self.device)
-        self.timestep_buff = torch.empty((self.capacity),dtype=int,device=self.device)
-        self.final_buf = torch.empty((self.capacity),dtype=int,device=self.device)
+        self.timestep_buf = torch.empty((self.capacity),dtype=int,device=self.device)
         self.ptr = 0
 
     def __getitem__(self,key):
@@ -145,6 +139,7 @@ class AdvantageBuffer():
         self.action = None
         self.policy = None
         self.value = None
+        self.reward = None
         self.reward_to_go = None
 
 

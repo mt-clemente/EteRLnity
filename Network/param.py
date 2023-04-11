@@ -1,6 +1,8 @@
 from math import log2,ceil
 import torch
 
+DEBUG = True
+
 # -------------------- PUZZLE SETTINGS -------------------- 
 
 PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
@@ -9,36 +11,35 @@ PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
 # global 2-swap gives a size 32640 neighborhood which can be too much
 # for the GPU. Capping the swapping range helps reduce the neighborhood
 # without losing connectivity.
-SWAP_RANGE = 2
 
 MAX_BSIZE = 16
-
 PADDED_SIZE = MAX_BSIZE + 2
-NORTH = 0
-SOUTH = 1
-WEST = 2
-EAST = 3
 
 GRAY = 0
-BLACK = 23
-RED = 24
-WHITE = 25
 N_COLORS = 23
 
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-GAE_LAMBDA = 0.988
-ENTROPY_WEIGHT = 0.001
-VALUE_WEIGHT = .5
-CONV_SIZES = [32,64,128]
-KERNEL_SIZES = [3,3,3]
-HIDDEN_SIZE = 128
+DIM_EMBED=3*16
+HIDDEN_SIZE = 32
+N_LAYERS = 2
+N_HEADS = 2
+GAE_LAMBDA = 0.99
+ENTROPY_WEIGHT = 0.00001
+VALUE_WEIGHT = .1
+POLICY_WEIGHT = 10
 
-# -------------------- TRAINING SETTINGS -------------------- 
+# --------------------  SETTINGS -------------------- 
+
+
+# CUDA can be slower for inference so cpu is used, except for training
+# set CUDA_ONLY to True to force cuda.
+CUDA_ONLY = False
+
 UNIT = torch.float
 
-ENCODING = 'binary'
+ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
     COLOR_ENCODING_SIZE = ceil(log2(N_COLORS))
@@ -49,14 +50,14 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 10
+EPOCHS = 15
 CHECKPOINT_PERIOD = 256*200
 MINIBATCH_SIZE = 64
-HORIZON = 1 # in number of episodes
-OPT_EPSILON = 1e-6
-LR = 6e-5
-GAMMA = 0.95
-CLIP_EPS = 0.2
+HORIZON = 4 # in number of episodes
+OPT_EPSILON = 1e-8
+LR = 1e-4
+GAMMA = 0.99
+CLIP_EPS = 0.1
 
 CONFIG = {
     'encoding':ENCODING,
