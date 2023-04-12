@@ -33,7 +33,7 @@ def train_model(hotstart:str = None):
 
     # -------------------- NETWORK INIT -------------------- 
 
-    if torch.cuda.is_available() and False: #FIXME:
+    if torch.cuda.is_available() and CUDA_ONLY: #FIXME:
         device = 'cuda'
     else:
         device = 'cpu'
@@ -47,7 +47,8 @@ def train_model(hotstart:str = None):
     'lr' : LR ,
     'epochs' : EPOCHS ,
     'minibatch_size' : MINIBATCH_SIZE,
-    'horizon' : HORIZON * n_tiles,
+    'horizon' : HORIZON,
+    'seq_len' : SEQ_LEN,
     'state_dim' : bsize+2,
     'n_layers':N_LAYERS,
     'n_heads':N_HEADS,
@@ -61,6 +62,7 @@ def train_model(hotstart:str = None):
 
 
     agent = PPOAgent(cfg)
+    agent.model.train()
 
     move_buffer = AdvantageBuffer()
     
@@ -68,7 +70,8 @@ def train_model(hotstart:str = None):
         n_tiles=n_tiles,
         bsize=bsize+2,
         ep_length=n_tiles,
-        capacity=HORIZON,
+        capacity=MEM_SIZE * n_tiles,
+        seq_len=SEQ_LEN,
         device=device
     )
 
@@ -76,6 +79,8 @@ def train_model(hotstart:str = None):
         ep_len=n_tiles,
         n_tiles=n_tiles,
         bsize=bsize+2,
+        horizon=HORIZON,
+        seq_len=SEQ_LEN,
         device=device
     )
 
@@ -91,6 +96,7 @@ def train_model(hotstart:str = None):
     print("start")
 
     best_score = 0
+    tile_importance = torch.zeros(n_tiles)
     episode = 0
 
     try:
@@ -110,7 +116,7 @@ def train_model(hotstart:str = None):
             episode_best_score = 0
             ep_start = step
             ep_step = 0
-            reward_to_go = n_tiles * 4 # approx 2*max_reward
+            reward_to_go = n_tiles * 3 # approx 2*max_reward
             ep_buf.rew_buf[0] = reward_to_go
 
 
@@ -121,25 +127,26 @@ def train_model(hotstart:str = None):
                 with torch.no_grad():
                     policy, value = agent.model.get_action(
                         state,
-                        seq['actions'][:-1],
-                        seq['returns_to_go'][:-1],
+                        seq['actions'],
+                        seq['returns_to_go'],
                         torch.tensor(ep_step,device=device),
                         )
 
                 selected_tile_idx = agent.get_action(policy,mask)
+                tile_importance[selected_tile_idx] += (n_tiles-ep_step) / 1000
                 selected_tile = remaining_tiles[selected_tile_idx]
                 mask[selected_tile_idx] = False
                 new_state, new_conf = place_tile(state,selected_tile,ep_step)
 
                 conflicts += new_conf
 
-                # if new_conf == 0:
-                #     consec_good_moves += 1
-                #     reward = streak(consec_good_moves,n_tiles)
-                # else:
-                #     consec_good_moves = 0
-                #     reward = - 1
-                reward = 2 - new_conf
+                if new_conf == 0:
+                    reward = 2
+                    # consec_good_moves += 1
+                    # reward = streak(consec_good_moves,n_tiles)
+                else:
+                    consec_good_moves = 0
+                    reward = 1 - new_conf
                 
                 reward_to_go -= reward
 
@@ -163,10 +170,15 @@ def train_model(hotstart:str = None):
                         ep_step
                     )
 
+                    ep_buf.compute_gae(agent.gamma,agent.gae_lambda)
+                    memory.load_advantages(ep_buf,ep_buf.adv_buf)
                 
+                # list_sol = to_list(new_state,bsize)
+                # pz.display_solution(list_sol,f"{step}")
                 if ep_step == n_tiles-1:
 
-                    # pz.display_solution(to_list(new_state,bsize),f"{step}")
+                    # print(pz.verify_solution(list_sol))
+
                     ep_buf.push(
                         state=state,
                         action=selected_tile_idx,
@@ -185,7 +197,7 @@ def train_model(hotstart:str = None):
 
                     # Compute the advantages once the epsiode is done.
                     ep_buf.compute_gae(agent.gamma,agent.gae_lambda)
-                    memory.load_advantages(ep_buf.adv_buf)
+                    memory.load_advantages(ep_buf,ep_buf.adv_buf)
 
                     ep_buf.reset()
                     
@@ -196,17 +208,18 @@ def train_model(hotstart:str = None):
                     episode_end = True
                     episode += 1
 
-                    if episode % LOG_EVERY == 0:
-                        wandb.log({
-                            "Mean episode reward":ep_reward/(step - ep_start + 1e-5),
-                            'Final conflicts':conflicts})
+                    wandb.log({
+                        "Mean episode reward":ep_reward/(step - ep_start + 1e-5),
+                        'Final conflicts':conflicts,
+                        'Tile rank':(tile_importance - tile_importance.mean() )/ (tile_importance.std() + 1e-5)
+                        }
+                        )
                     
-
-                if (step % (HORIZON * n_tiles)) == 0 and step != 0:
-
-                    agent.update(
-                        mem=memory
-                    )
+                    
+                    if memory.ptr == MEM_SIZE * n_tiles:
+                        agent.update(
+                            mem=memory
+                        )
 
                 
                 prev_conflicts = conflicts
@@ -220,8 +233,7 @@ def train_model(hotstart:str = None):
 
                 state = new_state
                 with torch.no_grad():
-                    policy_prob = torch.softmax(policy,dim=-1).squeeze(-1)
-                    policy_prob = policy_prob[policy_prob != 0]
+                    policy_prob = policy[policy != 0]
                     policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
                     
                 
@@ -242,7 +254,6 @@ def train_model(hotstart:str = None):
 
                 step += 1
                 ep_step += 1
-        
                 # checkpoint the policy net
                 if step % CHECKPOINT_PERIOD == 0:
                     inst = args.instance.replace("instances/eternity_","")

@@ -23,6 +23,7 @@ class PPOAgent:
         self.epochs = config['epochs']
         self.minibatch_size = config['minibatch_size']
         self.horizon = config['horizon']
+        self.seq_len = config['seq_len']
         self.state_dim = config['state_dim']
         self.entropy_weight = config['entropy_weight']
         self.value_weight = config['value_weight']
@@ -42,10 +43,11 @@ class PPOAgent:
             hidden_size=hidden_size,
             n_layers=n_layers,
             n_heads=n_heads,
+            max_length=self.seq_len,
             device=self.device,
             )
         
-        self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=1e-4)
         
     def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
 
@@ -67,16 +69,25 @@ class PPOAgent:
     
     # def update(self, states, actions, old_policies, values, advantages, returns):
     def update(self,mem:BatchMemory):
-        
+        """
+        Updates the ppo agent, using the trajectories in the memory buffer.
+        For states, policy, rewards, advantages, and timesteps the data is in a 
+        straightforward format [batch,*values]
+        For the returns-to-go and actions the data has a format [batch,sequence_len+1].
+        We need the sequence coming before the state to make a prediction, and the current
+        action to calculate the policy and ultimately the policy loss.
 
-        # device = 'cuda'
+        """
+
+
         t0 = datetime.now()
 
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and not CPU_TRAINING:
             self.model = self.model.cuda()
             training_device = 'cuda'
         else:
             training_device = 'cpu'
+
 
         dataset = TensorDataset(
             mem['state_buf'].to(training_device),
@@ -88,7 +99,7 @@ class PPOAgent:
             mem['timestep_buf'].to(training_device),
         )
 
-        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False)
+        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True)
         
 
         # Perform multiple update epochs
@@ -96,7 +107,7 @@ class PPOAgent:
             for batch in loader:
 
                 (
-                    batch_states_seq,
+                    batch_states,
                     batch_actions_seq,
                     batch_rtg_seq,
                     batch_advantages,
@@ -106,22 +117,24 @@ class PPOAgent:
                     
                 ) = batch
 
+                has_padding = (batch_actions_seq == -1).any(dim=-1)
+                
+                # actions taken
+                batch_actions = batch_actions_seq[:,-1].clone()
+                batch_actions[has_padding] = batch_actions_seq[has_padding,batch_timesteps[has_padding]+1].clone()
 
-                # end_rtg = batch_rtg_seq[torch.arange(batch_rtg_seq.size()[0]),batch_timesteps]
-                # end_minus1_rtg = batch_rtg_seq[torch.arange(batch_rtg_seq.size()[0]),batch_timesteps+1]
-                # last_seq_rewards =  end_rtg - end_minus1_rtg
+                # Remove the actions taken to get the action sequence that was used for inference
+                # for sequences with padding
+                batch_actions_seq[has_padding,batch_timesteps[has_padding]+1] = -1
 
                 batch_returns = batch_advantages + batch_values
 
                 batch_policy, batch_value = self.model(
-                    batch_states_seq,
+                    batch_states,
                     batch_actions_seq[:,:-1],
                     batch_rtg_seq[:,:-1],
                     batch_timesteps,
                 )
-
-
-                batch_actions = batch_actions_seq[torch.arange(batch_timesteps.size()[0]),batch_timesteps]
 
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-7)
                 batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-7)
@@ -157,12 +170,12 @@ class PPOAgent:
                     print("bp",batch_policy.max())
                     print("bp",batch_policy.min())
                     print("Loss",entropy_loss.item(),value_loss.item(),policy_loss.item(),loss)
-                    print("bst",batch_states_seq.max())
-                    print("bst",batch_states_seq.min())
+                    print("bst",batch_states.max())
+                    print("bst",batch_states.min())
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(),1)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(),0.5)
                 self.optimizer.step()
                 
                 g=0
@@ -172,13 +185,14 @@ class PPOAgent:
                     g+=torch.norm(param.grad)
 
                     
-
+        print(datetime.now()-t0)
         wandb.log({
             "Total loss":loss,
             "Cumul grad norm":g,
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
+            "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-8) - torch.log(batch_policy + 1e-8))).sum(dim=-1).mean()
             })
 
         if not CUDA_ONLY:
@@ -206,63 +220,91 @@ class DecisionTransformerAC(nn.Module):
             n_layers,
             n_heads,
             device,
-            max_length=None,
+            max_length,
     ):
         super().__init__()
         self.state_dim = state_dim
+        self.n_tiles = (state_dim-2)**2
         self.act_dim = act_dim
         self.hidden_size = hidden_size
-        self.max_length = max_length
-        self.seq_length = (state_dim-2)**2
+        self.seq_length = max_length
 
         # note: the only difference between this GPT2Model and the default Huggingface version
         # is that the positional embeddings are removed (since we'll add those ourselves)
-        self.transformer = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(
-                d_model=dim_embed,
-                dim_feedforward=self.hidden_size,
-                nhead=n_heads,
-                batch_first=True,
-                device=device,
-                dtype=UNIT
-            ),
-            num_layers=n_layers,
-            norm=nn.LayerNorm(dim_embed)
-        ) 
+        self.actor_dt =  nn.TransformerDecoder(
+                nn.TransformerDecoderLayer(
+                    d_model=dim_embed,
+                    dim_feedforward=self.hidden_size,
+                    nhead=n_heads,
+                    batch_first=True,
+                    norm_first=True,
+                    device=device,
+                    dtype=UNIT
+                ),
+                num_layers=n_layers,
+                norm=nn.LayerNorm(dim_embed,device=device)
+            )
+        
+
+        self.actor_head = nn.Sequential(
+            TransformerOutput((3, self.seq_length, dim_embed)),
+            nn.Linear(dim_embed, act_dim,device=device,dtype=UNIT),
+            SoftmaxStable()
+        )
+        self.critic_dt =  nn.TransformerDecoder(
+                nn.TransformerDecoderLayer(
+                    d_model=dim_embed,
+                    dim_feedforward=self.hidden_size,
+                    nhead=n_heads,
+                    batch_first=True,
+                    norm_first=True,
+                    device=device,
+                    dtype=UNIT
+                ),
+                num_layers=n_layers,
+                norm=nn.LayerNorm(dim_embed,device=device)
+            )
+        
+
+        self.critic_head = nn.Sequential(
+            TransformerOutput((3, self.seq_length, dim_embed)),
+            nn.Linear(dim_embed, 1,device=device,dtype=UNIT),
+        )
+
+        def init_weights(module):
+            if isinstance(module, nn.Linear):
+                nn.init.orthogonal_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
 
+        self.actor_dt.apply(init_weights)
+        self.critic_dt.apply(init_weights)
+        # Apply the initialization to the sublayers of the transformer layers
 
+
+            
         self.dim_embed = dim_embed 
-        self.embed_timestep = nn.Embedding(self.seq_length, dim_embed,device=device,dtype=UNIT)
+        self.embed_timestep = nn.Embedding(self.n_tiles, dim_embed,device=device,dtype=UNIT)
         self.embed_return = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
         self.embed_actions = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
         self.embed_state = nn.Sequential(
             nn.Linear(4 * COLOR_ENCODING_SIZE,self.dim_embed,device=device),
             PE2D(self.dim_embed),
-            View((-1,self.seq_length,self.dim_embed)),
+            View((-1,self.n_tiles,self.dim_embed)),
         )
 
         self.embed_ln = nn.LayerNorm(dim_embed,device=device,dtype=UNIT)
 
-        self.policy_head = nn.Sequential(
-            nn.Linear(dim_embed, act_dim,device=device,dtype=UNIT),
-            SoftmaxStable()
-        )
-
-        self.value_head = nn.Sequential(
-            nn.Linear(dim_embed, 1,device=device,dtype=UNIT)
-        )
 
 
     def forward(self, states, actions, returns_to_go, timesteps, attention_mask=None):
 
 
-        #BOS
+        #BOS   
 
         if states.dim() == 4:
-            action_bos = torch.full((actions.size(0), 1), -2,device=actions.device)
 
-            actions = torch.cat((action_bos, actions), dim=1)
             batch_size = states.shape[0]
             states_ = states
             returns_to_go_ = returns_to_go.unsqueeze(-1)
@@ -270,15 +312,29 @@ class DecisionTransformerAC(nn.Module):
             timesteps_ = timesteps.unsqueeze(-1)
         else:
             batch_size = 1
-            actions = torch.vstack((torch.tensor(-2,device=actions.device),actions))      
             states_ = states.unsqueeze(0)
             actions_ = actions.unsqueeze(0)
             returns_to_go_ = returns_to_go.unsqueeze(0)
             timesteps_ = timesteps.unsqueeze(0)
 
         # embed each modality with a different head
-        state_embeddings = self.embed_state(states_)
-    
+
+        unpadded_seqs = timesteps_ > self.seq_length
+        state_embeddings_full = self.embed_state(states_)
+        state_embeddings = state_embeddings_full[:, :self.seq_length, :]
+        mask = unpadded_seqs.reshape(states_.size()[0])
+
+
+        seq_indexes = repeat(torch.arange(self.seq_length,device=states.device),'i -> b i',b = states_.size()[0]).clone()
+
+        if mask.count_nonzero() != 0:
+            seq_indexes[mask] += timesteps_[mask] - self.seq_length
+
+        state_embeddings = torch.gather(state_embeddings_full, 1, seq_indexes.unsqueeze(-1).expand(-1, -1, state_embeddings_full.size(2)))
+
+        key_padding_mask = repeat(actions_.squeeze(-1) == -1,'b p -> b (c p)',c=3)
+
+
         actions_embeddings = self.embed_actions(actions_.to(UNIT))
         returns_embeddings = self.embed_return(returns_to_go_)
         time_embeddings = self.embed_timestep(timesteps_)
@@ -287,41 +343,45 @@ class DecisionTransformerAC(nn.Module):
         actions_embeddings = actions_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
 
-        # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
-        # which works nice in an autoregressive sense since states predict actions
         stacked_inputs = torch.stack(
             (returns_embeddings, state_embeddings, actions_embeddings), dim=1
-        )
-        
-        stacked_inputs = rearrange(stacked_inputs,'b c s e -> b (c s) e')
-        stacked_inputs = stacked_inputs.reshape(batch_size, 3*self.seq_length, self.dim_embed)
+        ).permute(0, 2, 1, 3).reshape(batch_size, 3*self.seq_length, self.dim_embed)
 
-            
         stacked_inputs = self.embed_ln(stacked_inputs)
 
-        mask = torch.arange(self.seq_length).expand(len(timesteps_), self.seq_length).to(timesteps.device)
-        mask = mask > timesteps.unsqueeze(-1)
-        mask = repeat(mask,'b s-> b (s k)',k=3)
+        # to make the attention mask fit the stacked inputs, have to stack it as well
+
+        stacked_inputs = self.embed_ln(stacked_inputs)
+
         # we feed in the input embeddings (not word indices as in NLP) to the model
-        transformer_outputs = self.transformer(
-            memory=torch.zeros_like(stacked_inputs),
+        policy_tokens = self.actor_dt( #FIXME: MASKKK
+            memory=torch.zeros_like(stacked_inputs,device=stacked_inputs.device),
             tgt=stacked_inputs,
-            tgt_key_padding_mask=mask
+            tgt_key_padding_mask=key_padding_mask
         )
 
-        x = transformer_outputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
+        value_tokens = self.critic_dt( #FIXME: MASKKK
+            memory=torch.zeros_like(stacked_inputs,device=stacked_inputs.device),
+            tgt=stacked_inputs,
+            tgt_key_padding_mask=key_padding_mask
+        )
+
+
+        policy_pred = self.actor_head(policy_tokens)
+        value_pred = self.critic_head(value_tokens)
+
+        # policy_ouputs = policy_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
+        # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
 
         # reshape x so that the second dimension corresponds to the original
         # returns (0), states (1), or actions (2); i.e. x[:,1,t] is the token for s_t
-        # x =
 
         # get predictions
+        # policy_preds = self.policy_head(x[:,2,-1,:])  # predict next actions given state
+        # value_preds = self.value_head(x[:,1,-1,:])
 
-        policy_preds = self.policy_head(x[:,2,-1,:])  # predict next actions given state
-        value_preds = self.value_head(x[:,2,-1,:])
 
-
-        return policy_preds, value_preds
+        return policy_pred, value_pred
 
     def get_action(self, state,policy,return_to_go,timestep):
         # we don't care about the past rewards in this model
@@ -331,6 +391,15 @@ class DecisionTransformerAC(nn.Module):
         
         return policy_preds, value_preds
     
+class TransformerOutput(nn.Module):
+
+    def __init__(self, shape):
+        super().__init__()
+        self.shape = shape
+
+    def forward(self, input):
+        input = input.reshape(input.size()[0],*self.shape)
+        return input[:,2,-1,:]
 
 class View(nn.Module):
 

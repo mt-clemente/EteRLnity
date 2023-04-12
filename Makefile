@@ -33,7 +33,7 @@ clean:
 
 
 profile:
-	python3 -m cProfile -s time -o out.pstats Network/train.py --instance=instances/eternity_complet.txt
+	python3 -m cProfile -s time -o out.pstats Network/train.py --instance=instances/eternity_E.txt
 
 plot:
 	gprof2dot --colour-nodes-by-selftime -f pstats out.pstats |  dot -Tpng -o output.png

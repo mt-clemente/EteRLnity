@@ -1,7 +1,6 @@
 from math import log2,ceil
 import torch
 
-DEBUG = True
 
 # -------------------- PUZZLE SETTINGS -------------------- 
 
@@ -21,22 +20,23 @@ N_COLORS = 23
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-DIM_EMBED=3*16
-HIDDEN_SIZE = 32
-N_LAYERS = 2
-N_HEADS = 2
+DIM_EMBED= 128 
+HIDDEN_SIZE = 256
+N_LAYERS = 3
+N_HEADS = 4
 GAE_LAMBDA = 0.99
-ENTROPY_WEIGHT = 0.00001
-VALUE_WEIGHT = .1
-POLICY_WEIGHT = 10
+ENTROPY_WEIGHT = 0.0001 * 0
+VALUE_WEIGHT = 0.05
+POLICY_WEIGHT = 2
 
 # --------------------  SETTINGS -------------------- 
 
+DEBUG = True
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
 CUDA_ONLY = False
-
+CPU_TRAINING = False
 UNIT = torch.float
 
 ENCODING = 'ordinal'
@@ -50,18 +50,28 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 15
+EPOCHS = 5
 CHECKPOINT_PERIOD = 256*200
-MINIBATCH_SIZE = 64
-HORIZON = 4 # in number of episodes
-OPT_EPSILON = 1e-8
-LR = 1e-4
+MINIBATCH_SIZE = 128
+HORIZON = 4 # in number of steps
+MEM_SIZE = 10 # in number of episodes
+SEQ_LEN = 4
+OPT_EPSILON = 1e-7
+LR = 1e-6
 GAMMA = 0.99
-CLIP_EPS = 0.1
+CLIP_EPS = 0.3
 
 CONFIG = {
-    'encoding':ENCODING,
     'unit':UNIT,
     'Batch size':MINIBATCH_SIZE,
     'Gamma':GAMMA,
+    'DIM_EMBED':DIM_EMBED,
+    'HIDDEN_SIZE':HIDDEN_SIZE,
+    'N_LAYERS':N_LAYERS,
+    'N_HEADS':N_HEADS,
+    'GAE_LAMBDA':GAE_LAMBDA,
+    'ENTROPY_WEIGHT':ENTROPY_WEIGHT,
+    'VALUE_WEIGHT':VALUE_WEIGHT,
+    'POLICY_WEIGHT':POLICY_WEIGHT,
+
 }
