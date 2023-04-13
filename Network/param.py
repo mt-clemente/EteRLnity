@@ -27,9 +27,9 @@ N_LAYERS = 6
 N_DECODE_LAYERS = 3
 N_HEADS = 4
 GAE_LAMBDA = 0.95
-ENTROPY_WEIGHT = 0.001
+ENTROPY_WEIGHT = 0.0001
 VALUE_WEIGHT = 0.5
-POLICY_WEIGHT = 2
+POLICY_WEIGHT = 1
 
 # --------------------  SETTINGS -------------------- 
 
@@ -56,10 +56,10 @@ EPOCHS = 10
 CHECKPOINT_PERIOD = 256*200
 MINIBATCH_SIZE = 128
 HORIZON = 8 # in number of steps
-MEM_SIZE = 1 # in number of episodes
-SEQ_LEN = 1
-OPT_EPSILON = 1e-2
-LR = 1e-4
+MEM_SIZE = 100 # in number of episodes
+SEQ_LEN = 10
+OPT_EPSILON = 1e-4
+LR = 1e-3
 GAMMA = 0.99
 CLIP_EPS = 0.3
 

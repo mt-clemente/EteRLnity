@@ -1,12 +1,9 @@
-from collections import namedtuple
 import os
-
 from einops import repeat, rearrange
 import torch
 from torch import Tensor
 from Trajectories import *
-from math import comb, exp
-from pytorch_memlab import MemReporter
+from math import exp
 from Transformer import PPOAgent
 from utils import *
 from param import *
@@ -146,7 +143,7 @@ def train_model(hotstart:str = None):
                     # reward = streak(consec_good_moves,n_tiles)
                 else:
                     consec_good_moves = 0
-                    reward = 1 - new_conf
+                    reward = 2 - new_conf
                 
                 reward_to_go -= reward
 

@@ -44,7 +44,17 @@ class PPOAgent:
             device=self.device,
             )
         
+
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
+        self.scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer=self.optimizer,
+            start_factor=0.001,
+            total_iters=100000,
+            end_factor=1.0,
+            total_iters=2000,
+        )
+
+
         
     def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
 
@@ -182,6 +192,7 @@ class PPOAgent:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(),0.5)
                 self.optimizer.step()
+                self.scheduler.step()
                 
                 g=0
                 for name,param in self.model.named_parameters():
@@ -271,6 +282,7 @@ class DecisionTransformerAC(nn.Module):
                 num_encoder_layers=N_LAYERS,
                 dim_feedforward=self.hidden_size,
                 dropout=0.05,
+                activation=F.gelu,
                 batch_first=True,
                 norm_first=True,
                 device=device,
@@ -283,6 +295,7 @@ class DecisionTransformerAC(nn.Module):
                 num_encoder_layers=N_LAYERS,
                 dim_feedforward=self.hidden_size,
                 dropout=0.05,
+                activation=F.gelu,
                 batch_first=True,
                 norm_first=True,
                 device=device,
@@ -311,10 +324,10 @@ class DecisionTransformerAC(nn.Module):
         self.critic_dt.apply(init_weights)
         # Apply the initialization to the sublayers of the transformer layers
 
-        wandb.watch(self.actor_dt,log='all',log_freq=800)
-        wandb.watch(self.actor_head,log='all',log_freq=800)
-        wandb.watch(self.critic_dt,log='all',log_freq=800)
-        wandb.watch(self.critic_head,log='all',log_freq=800)
+        wandb.watch(self.actor_dt,log='all',log_freq=50)
+        wandb.watch(self.actor_head,log='all',log_freq=50)
+        wandb.watch(self.critic_dt,log='all',log_freq=50)
+        wandb.watch(self.critic_head,log='all',log_freq=50)
             
         self.dim_embed = dim_embed 
         self.embed_timestep = nn.Embedding(self.n_tiles, dim_embed,device=device,dtype=UNIT)
@@ -370,15 +383,16 @@ class DecisionTransformerAC(nn.Module):
 
 
         src_key_padding_mask = (torch.arange(self.n_tiles,device=states.device).unsqueeze(1).repeat(4,timesteps_.size()[0]).transpose(0,1) > timesteps_)
+
         # we feed in the input embeddings (not word indices as in NLP) to the model
-        policy_tokens = self.actor_dt( #FIXME: MASKKK
+        policy_tokens = self.actor_dt(
             src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
             tgt=stacked_inputs,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=key_padding_mask
         )
 
-        value_tokens = self.critic_dt( #FIXME: MASKKK
+        value_tokens = self.critic_dt(
             src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
             tgt=stacked_inputs,
             src_key_padding_mask=src_key_padding_mask,
