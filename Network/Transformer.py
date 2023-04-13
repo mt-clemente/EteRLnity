@@ -49,9 +49,8 @@ class PPOAgent:
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=self.optimizer,
             start_factor=0.001,
-            total_iters=100000,
             end_factor=1.0,
-            total_iters=2000,
+            total_iters=20000,
         )
 
 
