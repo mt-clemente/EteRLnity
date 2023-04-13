@@ -11,9 +11,7 @@ import wandb
 from param import *
 from Trajectories import BatchMemory
 from torch.utils.data import TensorDataset,DataLoader
-import torch.nn.init as init
-
-
+from transformers import GPT2PreTrainedModel
 # -------------------- AGENT --------------------
 class PPOAgent:
     def __init__(self,config):
@@ -47,7 +45,7 @@ class PPOAgent:
             device=self.device,
             )
         
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=1e-4)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
         
     def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
 
@@ -99,7 +97,12 @@ class PPOAgent:
             mem['timestep_buf'].to(training_device),
         )
 
-        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True)
+        if (MEM_SIZE * self.action_dim) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2:
+            drop_last = True
+        else:
+            drop_last = False
+
+        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True, drop_last=drop_last)
         
 
         # Perform multiple update epochs
@@ -158,7 +161,7 @@ class PPOAgent:
 
                 loss = policy_loss + value_loss + entropy_loss
                 if DEBUG:
-                    print("--------")
+                    print(f"---- EPOCH {k} ----")
                     print("ba",batch_actions.max())
                     print("ba",batch_actions.min())
                     print("badv",batch_advantages.max())
@@ -170,6 +173,9 @@ class PPOAgent:
                     print("bp",batch_policy.max())
                     print("bp",batch_policy.min())
                     print("Loss",entropy_loss.item(),value_loss.item(),policy_loss.item(),loss)
+                    print("ratio",ratio.max())
+                    print("ratio",ratio.min())
+                    print("ratio",((ratio > 1 + CLIP_EPS).count_nonzero() + (ratio < 1 - CLIP_EPS).count_nonzero()))
                     print("bst",batch_states.max())
                     print("bst",batch_states.min())
 
@@ -229,7 +235,7 @@ class DecisionTransformerAC(nn.Module):
         self.hidden_size = hidden_size
         self.seq_length = max_length
 
-        # note: the only difference between this GPT2Model and the default Huggingface version
+        """ # note: the only difference between this GPT2Model and the default Huggingface version
         # is that the positional embeddings are removed (since we'll add those ourselves)
         self.actor_dt =  nn.TransformerDecoder(
                 nn.TransformerDecoderLayer(
@@ -246,11 +252,6 @@ class DecisionTransformerAC(nn.Module):
             )
         
 
-        self.actor_head = nn.Sequential(
-            TransformerOutput((3, self.seq_length, dim_embed)),
-            nn.Linear(dim_embed, act_dim,device=device,dtype=UNIT),
-            SoftmaxStable()
-        )
         self.critic_dt =  nn.TransformerDecoder(
                 nn.TransformerDecoderLayer(
                     d_model=dim_embed,
@@ -263,17 +264,46 @@ class DecisionTransformerAC(nn.Module):
                 ),
                 num_layers=n_layers,
                 norm=nn.LayerNorm(dim_embed,device=device)
+            ) """
+        
+        self.actor_dt =  nn.Transformer(
+                d_model=dim_embed,
+                num_decoder_layers=N_LAYERS,
+                num_encoder_layers=N_LAYERS,
+                dim_feedforward=self.hidden_size,
+                dropout=0.05,
+                batch_first=True,
+                norm_first=True,
+                device=device,
+                dtype=UNIT,
+            )
+        
+        self.critic_dt =  nn.Transformer(
+                d_model=dim_embed,
+                num_decoder_layers=N_LAYERS,
+                num_encoder_layers=N_LAYERS,
+                dim_feedforward=self.hidden_size,
+                dropout=0.05,
+                batch_first=True,
+                norm_first=True,
+                device=device,
+                dtype=UNIT,
             )
         
 
+        self.actor_head = nn.Sequential(
+            TransformerOutput((2, self.seq_length, dim_embed)),
+            nn.Linear(dim_embed, act_dim,device=device,dtype=UNIT),
+            SoftmaxStable()
+        )
         self.critic_head = nn.Sequential(
-            TransformerOutput((3, self.seq_length, dim_embed)),
+            TransformerOutput((2, self.seq_length, dim_embed)),
             nn.Linear(dim_embed, 1,device=device,dtype=UNIT),
         )
 
         def init_weights(module):
             if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight)
+                nn.init.xavier_normal_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
@@ -282,17 +312,16 @@ class DecisionTransformerAC(nn.Module):
         self.critic_dt.apply(init_weights)
         # Apply the initialization to the sublayers of the transformer layers
 
-
+        wandb.watch(self.actor_dt,log='all',log_freq=800)
+        wandb.watch(self.actor_head,log='all',log_freq=800)
+        wandb.watch(self.critic_dt,log='all',log_freq=800)
+        wandb.watch(self.critic_head,log='all',log_freq=800)
             
         self.dim_embed = dim_embed 
         self.embed_timestep = nn.Embedding(self.n_tiles, dim_embed,device=device,dtype=UNIT)
         self.embed_return = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
         self.embed_actions = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
-        self.embed_state = nn.Sequential(
-            nn.Linear(4 * COLOR_ENCODING_SIZE,self.dim_embed,device=device),
-            PE2D(self.dim_embed),
-            View((-1,self.n_tiles,self.dim_embed)),
-        )
+        self.embed_state = nn.Embedding(self.n_tiles,dim_embed,device=device,dtype=UNIT)
 
         self.embed_ln = nn.LayerNorm(dim_embed,device=device,dtype=UNIT)
 
@@ -319,33 +348,19 @@ class DecisionTransformerAC(nn.Module):
 
         # embed each modality with a different head
 
-        unpadded_seqs = timesteps_ > self.seq_length
-        state_embeddings_full = self.embed_state(states_)
-        state_embeddings = state_embeddings_full[:, :self.seq_length, :]
-        mask = unpadded_seqs.reshape(states_.size()[0])
-
-
-        seq_indexes = repeat(torch.arange(self.seq_length,device=states.device),'i -> b i',b = states_.size()[0]).clone()
-
-        if mask.count_nonzero() != 0:
-            seq_indexes[mask] += timesteps_[mask] - self.seq_length
-
-        state_embeddings = torch.gather(state_embeddings_full, 1, seq_indexes.unsqueeze(-1).expand(-1, -1, state_embeddings_full.size(2)))
-
-        key_padding_mask = repeat(actions_.squeeze(-1) == -1,'b p -> b (c p)',c=3)
+        key_padding_mask = repeat(actions_.squeeze(-1) == -1,'b p -> b (c p)',c=2)
 
 
         actions_embeddings = self.embed_actions(actions_.to(UNIT))
-        returns_embeddings = self.embed_return(returns_to_go_)
+        returns_embeddings = self.embed_return(returns_to_go_.to(UNIT))
         time_embeddings = self.embed_timestep(timesteps_)
 
-        state_embeddings = state_embeddings + time_embeddings
         actions_embeddings = actions_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
-
+        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
         stacked_inputs = torch.stack(
-            (returns_embeddings, state_embeddings, actions_embeddings), dim=1
-        ).permute(0, 2, 1, 3).reshape(batch_size, 3*self.seq_length, self.dim_embed)
+            (returns_embeddings, actions_embeddings), dim=1
+        ).permute(0, 2, 1, 3).reshape(batch_size, 2*self.seq_length, self.dim_embed)
 
         stacked_inputs = self.embed_ln(stacked_inputs)
 
@@ -353,19 +368,23 @@ class DecisionTransformerAC(nn.Module):
 
         stacked_inputs = self.embed_ln(stacked_inputs)
 
+
+
+        src_key_padding_mask = (torch.arange(self.n_tiles,device=states.device).unsqueeze(1).repeat(4,timesteps_.size()[0]).transpose(0,1) > timesteps_)
         # we feed in the input embeddings (not word indices as in NLP) to the model
         policy_tokens = self.actor_dt( #FIXME: MASKKK
-            memory=torch.zeros_like(stacked_inputs,device=stacked_inputs.device),
+            src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
             tgt=stacked_inputs,
+            src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=key_padding_mask
         )
 
         value_tokens = self.critic_dt( #FIXME: MASKKK
-            memory=torch.zeros_like(stacked_inputs,device=stacked_inputs.device),
+            src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
             tgt=stacked_inputs,
+            src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=key_padding_mask
         )
-
 
         policy_pred = self.actor_head(policy_tokens)
         value_pred = self.critic_head(value_tokens)
@@ -399,7 +418,7 @@ class TransformerOutput(nn.Module):
 
     def forward(self, input):
         input = input.reshape(input.size()[0],*self.shape)
-        return input[:,2,-1,:]
+        return input[:,1,-1,:]
 
 class View(nn.Module):
 

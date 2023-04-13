@@ -96,16 +96,16 @@ class EpisodeBuffer:
 
 
     def reset(self):
-        self.state_buf = torch.zeros((self.ep_len,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device)
-        self.act_buf = torch.zeros((self.ep_len+1),dtype=int,device=self.device) - 1
+        self.state_buf = torch.zeros((self.ep_len,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
+        self.act_buf = torch.zeros((self.ep_len+1),dtype=int,device=self.device).to(UNIT) - 1
         self.act_buf[0] = -2 #BOS
-        self.rtg_buf = torch.zeros((self.ep_len+1),device=self.device)
-        self.policy_buf = torch.zeros((self.ep_len,self.n_tiles),device=self.device)
-        self.value_buf = torch.zeros((self.ep_len),device=self.device)
-        self.next_value_buf = torch.zeros((self.ep_len),device=self.device)
-        self.rew_buf = torch.zeros((self.ep_len),device=self.device)
-        self.final_buf = torch.zeros((self.ep_len),dtype=int,device=self.device)
-        self.adv_buf = torch.zeros((self.horizon),device=self.device)
+        self.rtg_buf = torch.zeros((self.ep_len+1),device=self.device).to(UNIT)
+        self.policy_buf = torch.zeros((self.ep_len,self.n_tiles),device=self.device).to(UNIT)
+        self.value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.next_value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.rew_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.final_buf = torch.zeros((self.ep_len),dtype=int,device=self.device).to(UNIT)
+        self.adv_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
         self.ptr = 0
 
 class BatchMemory:
@@ -150,12 +150,12 @@ class BatchMemory:
 
         if self.ptr != self.capacity:
             print(Warning(f'Memory not full : {self.ptr}/{self.capacity}'))
-        self.state_buf = torch.empty((self.capacity,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device)
+        self.state_buf = torch.empty((self.capacity,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
         self.act_buf = torch.empty((self.capacity,self.seq_len+1),dtype=int,device=self.device)
-        self.rtg_buf = torch.empty((self.capacity,self.seq_len+1),device=self.device)
-        self.policy_buf = torch.empty((self.capacity,self.n_tiles),device=self.device)
-        self.adv_buf = torch.zeros((self.capacity),device=self.device)
-        self.value_buf = torch.empty((self.capacity),device=self.device)
+        self.rtg_buf = torch.empty((self.capacity,self.seq_len+1),device=self.device).to(UNIT)
+        self.policy_buf = torch.empty((self.capacity,self.n_tiles),device=self.device).to(UNIT)
+        self.adv_buf = torch.zeros((self.capacity),device=self.device).to(UNIT)
+        self.value_buf = torch.empty((self.capacity),device=self.device).to(UNIT)
         self.timestep_buf = torch.empty((self.capacity),dtype=int,device=self.device)
         self.ptr = 0
 

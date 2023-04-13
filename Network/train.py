@@ -133,7 +133,7 @@ def train_model(hotstart:str = None):
                         )
 
                 selected_tile_idx = agent.get_action(policy,mask)
-                tile_importance[selected_tile_idx] += (n_tiles-ep_step) / 1000
+                tile_importance[selected_tile_idx.cpu()] += (n_tiles-ep_step) / 1000
                 selected_tile = remaining_tiles[selected_tile_idx]
                 mask[selected_tile_idx] = False
                 new_state, new_conf = place_tile(state,selected_tile,ep_step)

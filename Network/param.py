@@ -1,6 +1,7 @@
 from math import log2,ceil
 import torch
 
+torch.manual_seed(0)
 
 # -------------------- PUZZLE SETTINGS -------------------- 
 
@@ -20,13 +21,14 @@ N_COLORS = 23
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-DIM_EMBED= 128 
-HIDDEN_SIZE = 256
-N_LAYERS = 3
+DIM_EMBED= 512
+HIDDEN_SIZE = 2048
+N_LAYERS = 6
+N_DECODE_LAYERS = 3
 N_HEADS = 4
-GAE_LAMBDA = 0.99
-ENTROPY_WEIGHT = 0.0001 * 0
-VALUE_WEIGHT = 0.05
+GAE_LAMBDA = 0.95
+ENTROPY_WEIGHT = 0.001
+VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 2
 
 # --------------------  SETTINGS -------------------- 
@@ -35,9 +37,9 @@ DEBUG = True
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = False
+CUDA_ONLY = True
 CPU_TRAINING = False
-UNIT = torch.float
+UNIT = torch.half
 
 ENCODING = 'ordinal'
 
@@ -50,14 +52,14 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 5
+EPOCHS = 10
 CHECKPOINT_PERIOD = 256*200
 MINIBATCH_SIZE = 128
-HORIZON = 4 # in number of steps
-MEM_SIZE = 10 # in number of episodes
-SEQ_LEN = 4
-OPT_EPSILON = 1e-7
-LR = 1e-6
+HORIZON = 8 # in number of steps
+MEM_SIZE = 1 # in number of episodes
+SEQ_LEN = 1
+OPT_EPSILON = 1e-2
+LR = 1e-4
 GAMMA = 0.99
 CLIP_EPS = 0.3
 
