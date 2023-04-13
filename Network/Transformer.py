@@ -11,7 +11,6 @@ import wandb
 from param import *
 from Trajectories import BatchMemory
 from torch.utils.data import TensorDataset,DataLoader
-from transformers import GPT2PreTrainedModel
 # -------------------- AGENT --------------------
 class PPOAgent:
     def __init__(self,config):
