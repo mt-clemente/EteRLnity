@@ -65,11 +65,15 @@ CLIP_EPS = 0.1
 
 CONFIG = {
     'unit':UNIT,
+    'Epoch':EPOCHS,
     'Batch size':MINIBATCH_SIZE,
     'Gamma':GAMMA,
     'DIM_EMBED':DIM_EMBED,
     'HIDDEN_SIZE':HIDDEN_SIZE,
-    'N_LAYERS':N_LAYERS,
+    'Encoder layers':N_LAYERS,
+    'Decoder layers':N_DECODE_LAYERS,
+    'Horizon':HORIZON,
+    'Transformer sequence length':SEQ_LEN,
     'N_HEADS':N_HEADS,
     'GAE_LAMBDA':GAE_LAMBDA,
     'ENTROPY_WEIGHT':ENTROPY_WEIGHT,

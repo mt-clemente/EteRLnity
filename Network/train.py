@@ -381,7 +381,7 @@ if __name__ == "__main__"  and '__file__' in globals():
     CONFIG['Instance'] = args.instance.replace('instances/','')
     torch.autograd.set_detect_anomaly(True)
     wandb.init(
-        project='Eternity II',
+        project='EteRLnity',
         entity='mateo-clemente',
         group='Decision Transformer',
         config=CONFIG
