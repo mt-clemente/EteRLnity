@@ -53,8 +53,6 @@ class PPOAgent:
             total_iters=20000,
         )
 
-
-        
     def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
 
         if mask.count_nonzero() == 0:
@@ -63,16 +61,7 @@ class PPOAgent:
         sm /= sm.sum(dim=-1, keepdim=True)
         return torch.multinomial(sm,1)
         
-    def compute_gae(self, rewards, values, next_values, finals): #FIXME: move to training, to get the good whole trajectory.
 
-        td_errors = rewards + self.gamma * next_values * (1 - finals) - values
-        gae = 0
-        advantages = torch.zeros_like(td_errors)
-        for t in reversed(range(len(td_errors))):
-            gae = td_errors[t] + self.gamma * self.gae_lambda * (1 - finals[t]) * gae
-            advantages[t] = gae
-        return advantages
-    
     # def update(self, states, actions, old_policies, values, advantages, returns):
     def update(self,mem:BatchMemory):
         """
@@ -105,10 +94,15 @@ class PPOAgent:
             mem['timestep_buf'].to(training_device),
         )
 
-        if (MEM_SIZE * self.action_dim) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2:
+        if (498401586 * self.action_dim) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2:
             drop_last = True
         else:
             drop_last = False
+
+
+
+
+
 
         loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True, drop_last=drop_last)
         
@@ -192,7 +186,6 @@ class PPOAgent:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(),0.5)
                 self.optimizer.step()
                 self.scheduler.step()
-                
                 g=0
                 for name,param in self.model.named_parameters():
                     # print(f"{name:>28} - {torch.norm(param.grad)}")
@@ -203,6 +196,7 @@ class PPOAgent:
         print(datetime.now()-t0)
         wandb.log({
             "Total loss":loss,
+            "Current learning rate":self.scheduler.get_last_lr()[0],
             "Cumul grad norm":g,
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
@@ -212,11 +206,7 @@ class PPOAgent:
 
         if not CUDA_ONLY:
             self.model = self.model.cpu()
-        mem.reset()
     
-
-
-
 
 # -------------------- ACTOR / CRITIC --------------------
     
@@ -278,7 +268,7 @@ class DecisionTransformerAC(nn.Module):
         self.actor_dt =  nn.Transformer(
                 d_model=dim_embed,
                 num_decoder_layers=N_LAYERS,
-                num_encoder_layers=N_LAYERS,
+                num_encoder_layers=N_DECODE_LAYERS,
                 dim_feedforward=self.hidden_size,
                 dropout=0.05,
                 activation=F.gelu,
@@ -291,7 +281,7 @@ class DecisionTransformerAC(nn.Module):
         self.critic_dt =  nn.Transformer(
                 d_model=dim_embed,
                 num_decoder_layers=N_LAYERS,
-                num_encoder_layers=N_LAYERS,
+                num_encoder_layers=N_DECODE_LAYERS,
                 dim_feedforward=self.hidden_size,
                 dropout=0.05,
                 activation=F.gelu,
@@ -314,7 +304,7 @@ class DecisionTransformerAC(nn.Module):
 
         def init_weights(module):
             if isinstance(module, nn.Linear):
-                nn.init.xavier_normal_(module.weight)
+                nn.init.orthogonal_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 

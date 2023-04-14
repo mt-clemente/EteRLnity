@@ -26,7 +26,6 @@ def train_model(hotstart:str = None):
     hotstart = args.hotstart
     # torch.cuda.is_available = lambda : False
     
-    # -------------------- GAME INIT --------------------
 
     # -------------------- NETWORK INIT -------------------- 
 
@@ -35,6 +34,9 @@ def train_model(hotstart:str = None):
     else:
         device = 'cpu'
 
+
+    if not HORIZON % n_tiles:
+        print(UserWarning("Episode length is not a multiple of horizon, will lose the end of the episode"))
 
 
     cfg = {
@@ -66,8 +68,8 @@ def train_model(hotstart:str = None):
     memory = BatchMemory(
         n_tiles=n_tiles,
         bsize=bsize+2,
-        ep_length=n_tiles,
-        capacity=MEM_SIZE * n_tiles,
+        horizon=HORIZON,
+        capacity=n_tiles,
         seq_len=SEQ_LEN,
         device=device
     )
@@ -78,6 +80,8 @@ def train_model(hotstart:str = None):
         bsize=bsize+2,
         horizon=HORIZON,
         seq_len=SEQ_LEN,
+        gamma=GAMMA,
+        gae_lambda=GAE_LAMBDA,
         device=device
     )
 
@@ -158,7 +162,6 @@ def train_model(hotstart:str = None):
                         value=move_buffer.value,
                         next_value=value,
                         reward=move_buffer.reward,
-                        reward_to_go=move_buffer.reward_to_go,
                         final=0
                     )
 
@@ -167,8 +170,6 @@ def train_model(hotstart:str = None):
                         ep_step
                     )
 
-                    ep_buf.compute_gae(agent.gamma,agent.gae_lambda)
-                    memory.load_advantages(ep_buf,ep_buf.adv_buf)
                 
                 # list_sol = to_list(new_state,bsize)
                 # pz.display_solution(list_sol,f"{step}")
@@ -183,7 +184,6 @@ def train_model(hotstart:str = None):
                         value=value,
                         next_value=0,
                         reward=reward,
-                        reward_to_go=reward_to_go,
                         final=1
                     )
                     memory.load(
@@ -193,15 +193,12 @@ def train_model(hotstart:str = None):
                     
 
                     # Compute the advantages once the epsiode is done.
-                    ep_buf.compute_gae(agent.gamma,agent.gae_lambda)
-                    memory.load_advantages(ep_buf,ep_buf.adv_buf)
 
-                    ep_buf.reset()
                     
                     curr_valid_state = new_state
 
                     if episode % 1 == 0:
-                        print(f"END EPISODE {episode} - Conflicts {conflicts}/{bsize * 2 *(bsize+1)}",end='\r')
+                        print(f"END EPISODE {episode} - Conflicts {conflicts}/{bsize * 2 *(bsize+1)}")
                     episode_end = True
                     episode += 1
 
@@ -212,28 +209,31 @@ def train_model(hotstart:str = None):
                         }
                         )
                     
+
                     
-                    if memory.ptr == MEM_SIZE * n_tiles:
-                        agent.update(
-                            mem=memory
-                        )
+                if (step) % HORIZON == 0 and ep_step != 0 or (step + 1)% HORIZON==0 and episode_end:
+                    memory.load_advantages_rtg(ep_buf)
+                    agent.update(
+                        mem=memory
+                    )
+                    ep_buf.reset()
+                    if n_tiles - ep_step < HORIZON:
+                        memory.reset()
+
+
 
                 
-                prev_conflicts = conflicts
                 move_buffer.state = state 
                 move_buffer.action = selected_tile_idx 
                 move_buffer.policy = policy 
                 move_buffer.value = value 
                 move_buffer.reward = reward 
-                move_buffer.reward_to_go = reward_to_go 
-
 
                 state = new_state
+
                 with torch.no_grad():
                     policy_prob = policy[policy != 0]
                     policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
-                    
-                
 
                 if step % LOG_EVERY==0:
 
@@ -244,13 +244,10 @@ def train_model(hotstart:str = None):
                             'Reward': reward,
                         }
                     )
-                # -------------------- MODEL OPTIMIZATION --------------------
-
-
-                # torch.cuda.empty_cache() 
 
                 step += 1
                 ep_step += 1
+
                 # checkpoint the policy net
                 if step % CHECKPOINT_PERIOD == 0:
                     inst = args.instance.replace("instances/eternity_","")
