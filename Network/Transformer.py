@@ -94,7 +94,8 @@ class PPOAgent:
             mem['timestep_buf'].to(training_device),
         )
 
-        if (498401586 * self.action_dim) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2:
+        if (self.horizon) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2 and self.horizon % MINIBATCH_SIZE != 0:
+            print("dropping last ",(self.horizon) % MINIBATCH_SIZE)
             drop_last = True
         else:
             drop_last = False
@@ -141,8 +142,8 @@ class PPOAgent:
                     batch_timesteps,
                 )
 
-                batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-7)
-                batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-7)
+                batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
+                batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
 
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
@@ -304,7 +305,10 @@ class DecisionTransformerAC(nn.Module):
 
         def init_weights(module):
             if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight)
+                if UNIT == torch.half:
+                    nn.init.xavier_normal_(module.weight)
+                else:
+                    nn.init.orthogonal_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
@@ -368,9 +372,6 @@ class DecisionTransformerAC(nn.Module):
         # to make the attention mask fit the stacked inputs, have to stack it as well
 
         stacked_inputs = self.embed_ln(stacked_inputs)
-
-
-
         src_key_padding_mask = (torch.arange(self.n_tiles,device=states.device).unsqueeze(1).repeat(4,timesteps_.size()[0]).transpose(0,1) > timesteps_)
 
         # we feed in the input embeddings (not word indices as in NLP) to the model

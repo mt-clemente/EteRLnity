@@ -217,7 +217,7 @@ def train_model(hotstart:str = None):
                         mem=memory
                     )
                     ep_buf.reset()
-                    if n_tiles - ep_step < HORIZON:
+                    if n_tiles - ep_step < HORIZON or episode_end:
                         memory.reset()
 
 

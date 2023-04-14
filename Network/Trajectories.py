@@ -104,7 +104,7 @@ class EpisodeBuffer:
         return_to_go = 0
         for t in reversed(range(len(rewards))):
             return_to_go = rewards[t] + gamma * (1 - finals[t]) * return_to_go
-            returns_to_go[t] = return_to_go   
+            returns_to_go[t] = return_to_go 
 
         self.adv_buf[bot:top] = advantages
         self.rtg_buf[bot:top] = returns_to_go
@@ -162,9 +162,8 @@ class BatchMemory:
         if ep_buf.ptr != ep_buf.ep_len:
             raise IndexError(ep_buf.ptr,ep_buf.ep_len)
 
-
         self.adv_buf[self.ptr - self.horizon:self.ptr] = ep_buf.adv_buf
-        self.rtg_buf[self.ptr-1] = ep_buf.rtg_buf[-self.seq_len-1:]
+        self.rtg_buf[self.ptr - self.horizon:self.ptr] = ep_buf.rtg_buf[-self.seq_len-1:]
 
 
 
