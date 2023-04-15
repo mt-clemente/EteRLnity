@@ -31,6 +31,7 @@ class EpisodeBuffer:
             policy,
             value,
             next_value,
+            mask,
             reward,
             final
             ):
@@ -40,8 +41,9 @@ class EpisodeBuffer:
         self.value_buf[self.ptr] = value
         self.next_value_buf[self.ptr] = next_value
         self.rew_buf[self.ptr] = reward
-        self.act_buf[self.ptr+1] = action
+        self.act_buf[self.ptr] = action
         self.final_buf[self.ptr] = final
+        self.mask_buf[self.ptr] = mask
 
         self.ptr += 1
 
@@ -92,32 +94,22 @@ class EpisodeBuffer:
 
         td_errors = rewards + gamma * next_values * (1 - finals) - values
         gae = 0
-        rtgs = 0
         advantages = torch.zeros_like(td_errors)
 
         for t in reversed(range(len(td_errors))):
             gae = td_errors[t] + gamma * gae_lambda * (1 - finals[t]) * gae
             advantages[t] = gae
 
-
-        returns_to_go = torch.zeros_like(rewards)
-        return_to_go = 0
-        for t in reversed(range(len(rewards))):
-            return_to_go = rewards[t] + gamma * (1 - finals[t]) * return_to_go
-            returns_to_go[t] = return_to_go 
-
         self.adv_buf[bot:top] = advantages
-        self.rtg_buf[bot:top] = returns_to_go
 
 
     def reset(self):
         self.state_buf = torch.zeros((self.horizon,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
-        self.act_buf = torch.zeros((self.horizon+1),dtype=int,device=self.device).to(UNIT) - 1
-        self.act_buf[0] = -2 #BOS
-        self.rtg_buf = torch.zeros((self.horizon+1),device=self.device).to(UNIT)
+        self.act_buf = torch.zeros((self.horizon),dtype=int,device=self.device).to(UNIT) - 1
         self.policy_buf = torch.zeros((self.horizon,self.n_tiles),device=self.device).to(UNIT)
         self.value_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
         self.next_value_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
+        self.mask_buf = torch.empty((self.horizon,self.n_tiles),device=self.device,dtype=bool)
         self.rew_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
         self.final_buf = torch.zeros((self.horizon),dtype=int,device=self.device).to(UNIT)
         self.adv_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
@@ -140,22 +132,13 @@ class BatchMemory:
 
     def load(self,buff:EpisodeBuffer,step:int):
 
-        # pad for the unfinished trajectories
-        k = self.seq_len
-
-        if buff.ptr >= k+1:
-            bot = buff.ptr-1-k
-            top = buff.ptr
-        
-        else:
-            bot = 0
-            top = k+1
-
-        self.act_buf[self.ptr] = buff.act_buf.squeeze(-1)[bot:top]
+        self.act_buf[self.ptr] = buff.act_buf.squeeze(-1)[buff.ptr - 1]
         self.state_buf[self.ptr] = buff.state_buf[buff.ptr - 1]
         self.timestep_buf[self.ptr] = buff.ptr - 1
         self.policy_buf[self.ptr] = buff.policy_buf[buff.ptr - 1]
         self.value_buf[self.ptr] = buff.value_buf[buff.ptr - 1]
+        self.mask_buf[self.ptr] = buff.mask_buf[buff.ptr - 1]
+
         self.ptr += 1
 
     def load_advantages_rtg(self,ep_buf:EpisodeBuffer): #FIXME:
@@ -163,7 +146,6 @@ class BatchMemory:
             raise IndexError(ep_buf.ptr,ep_buf.ep_len)
 
         self.adv_buf[self.ptr - self.horizon:self.ptr] = ep_buf.adv_buf
-        self.rtg_buf[self.ptr - self.horizon:self.ptr] = ep_buf.rtg_buf[-self.seq_len-1:]
 
 
 
@@ -173,8 +155,8 @@ class BatchMemory:
         if self.ptr != self.capacity:
             print(Warning(f'Memory not full : {self.ptr}/{self.capacity}'))
         self.state_buf = torch.empty((self.capacity,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
-        self.act_buf = torch.empty((self.capacity,self.seq_len+1),dtype=int,device=self.device)
-        self.rtg_buf = torch.empty((self.capacity,self.seq_len+1),device=self.device).to(UNIT)
+        self.act_buf = torch.empty((self.capacity),dtype=int,device=self.device)
+        self.mask_buf = torch.empty((self.capacity,self.n_tiles),device=self.device,dtype=bool)
         self.policy_buf = torch.empty((self.capacity,self.n_tiles),device=self.device).to(UNIT)
         self.adv_buf = torch.zeros((self.capacity),device=self.device).to(UNIT)
         self.value_buf = torch.empty((self.capacity),device=self.device).to(UNIT)
@@ -195,6 +177,7 @@ class AdvantageBuffer():
         self.policy = None
         self.value = None
         self.reward = None
+        self.mask = None
         self.reward_to_go = None
 
 

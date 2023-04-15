@@ -13,7 +13,7 @@ from Trajectories import BatchMemory
 from torch.utils.data import TensorDataset,DataLoader
 # -------------------- AGENT --------------------
 class PPOAgent:
-    def __init__(self,config):
+    def __init__(self,config,tiles):
         self.gamma = config['gamma']
         self.clip_eps = config['clip_eps']
         self.lr = config['lr']
@@ -32,8 +32,10 @@ class PPOAgent:
         n_layers = config['n_layers']
         n_heads = config['n_heads']
 
+
         self.action_dim = n_tiles
         self.model = DecisionTransformerAC(
+            tiles = tiles,
             state_dim=self.state_dim,
             act_dim=self.action_dim,
             dim_embed=dim_embed,
@@ -87,7 +89,7 @@ class PPOAgent:
         dataset = TensorDataset(
             mem['state_buf'].to(training_device),
             mem['act_buf'].to(training_device),
-            mem['rtg_buf'].to(training_device),
+            mem['mask_buf'].to(training_device),
             mem['adv_buf'].to(training_device),
             mem['policy_buf'].to(training_device),
             mem['value_buf'].to(training_device),
@@ -101,11 +103,7 @@ class PPOAgent:
             drop_last = False
 
 
-
-
-
-
-        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True, drop_last=drop_last)
+        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False, drop_last=drop_last)
         
 
         # Perform multiple update epochs
@@ -114,8 +112,8 @@ class PPOAgent:
 
                 (
                     batch_states,
-                    batch_actions_seq,
-                    batch_rtg_seq,
+                    batch_actions,
+                    batch_masks,
                     batch_advantages,
                     batch_old_policies,
                     batch_values,
@@ -123,22 +121,13 @@ class PPOAgent:
                     
                 ) = batch
 
-                has_padding = (batch_actions_seq == -1).any(dim=-1)
-                
-                # actions taken
-                batch_actions = batch_actions_seq[:,-1].clone()
-                batch_actions[has_padding] = batch_actions_seq[has_padding,batch_timesteps[has_padding]+1].clone()
-
-                # Remove the actions taken to get the action sequence that was used for inference
-                # for sequences with padding
-                batch_actions_seq[has_padding,batch_timesteps[has_padding]+1] = -1
-
                 batch_returns = batch_advantages + batch_values
 
+                print(batch_states.size())
+                print(batch_actions.size())
                 batch_policy, batch_value = self.model(
                     batch_states,
-                    batch_actions_seq[:,:-1],
-                    batch_rtg_seq[:,:-1],
+                    batch_masks,
                     batch_timesteps,
                 )
 
@@ -225,6 +214,7 @@ class DecisionTransformerAC(nn.Module):
             hidden_size,
             n_layers,
             n_heads,
+            tiles,
             device,
             max_length,
     ):
@@ -234,40 +224,11 @@ class DecisionTransformerAC(nn.Module):
         self.act_dim = act_dim
         self.hidden_size = hidden_size
         self.seq_length = max_length
+        self.tiles = tiles
 
-        """ # note: the only difference between this GPT2Model and the default Huggingface version
-        # is that the positional embeddings are removed (since we'll add those ourselves)
-        self.actor_dt =  nn.TransformerDecoder(
-                nn.TransformerDecoderLayer(
-                    d_model=dim_embed,
-                    dim_feedforward=self.hidden_size,
-                    nhead=n_heads,
-                    batch_first=True,
-                    norm_first=True,
-                    device=device,
-                    dtype=UNIT
-                ),
-                num_layers=n_layers,
-                norm=nn.LayerNorm(dim_embed,device=device)
-            )
-        
-
-        self.critic_dt =  nn.TransformerDecoder(
-                nn.TransformerDecoderLayer(
-                    d_model=dim_embed,
-                    dim_feedforward=self.hidden_size,
-                    nhead=n_heads,
-                    batch_first=True,
-                    norm_first=True,
-                    device=device,
-                    dtype=UNIT
-                ),
-                num_layers=n_layers,
-                norm=nn.LayerNorm(dim_embed,device=device)
-            ) """
         
         self.actor_dt =  nn.Transformer(
-                d_model=dim_embed,
+                d_model=dim_embed*4,
                 num_decoder_layers=N_LAYERS,
                 num_encoder_layers=N_DECODE_LAYERS,
                 dim_feedforward=self.hidden_size,
@@ -280,7 +241,7 @@ class DecisionTransformerAC(nn.Module):
             )
         
         self.critic_dt =  nn.Transformer(
-                d_model=dim_embed,
+                d_model=dim_embed*4,
                 num_decoder_layers=N_LAYERS,
                 num_encoder_layers=N_DECODE_LAYERS,
                 dim_feedforward=self.hidden_size,
@@ -292,15 +253,15 @@ class DecisionTransformerAC(nn.Module):
                 dtype=UNIT,
             )
         
+        self.detokenize_policy = nn.Linear(4 * dim_embed,1, device=device, dtype=UNIT)
+        self.detokenize_value = nn.Linear(4 * dim_embed,1, device=device, dtype=UNIT)
 
         self.actor_head = nn.Sequential(
-            TransformerOutput((2, self.seq_length, dim_embed)),
-            nn.Linear(dim_embed, act_dim,device=device,dtype=UNIT),
+            nn.Linear(self.seq_length, act_dim,device=device,dtype=UNIT),
             SoftmaxStable()
         )
         self.critic_head = nn.Sequential(
-            TransformerOutput((2, self.seq_length, dim_embed)),
-            nn.Linear(dim_embed, 1,device=device,dtype=UNIT),
+            nn.Linear(self.seq_length, 1,device=device,dtype=UNIT),
         )
 
         def init_weights(module):
@@ -322,94 +283,63 @@ class DecisionTransformerAC(nn.Module):
         wandb.watch(self.critic_dt,log='all',log_freq=50)
         wandb.watch(self.critic_head,log='all',log_freq=50)
             
-        self.dim_embed = dim_embed 
-        self.embed_timestep = nn.Embedding(self.n_tiles, dim_embed,device=device,dtype=UNIT)
-        self.embed_return = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
-        self.embed_actions = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
+        self.dim_embed = dim_embed
+        self.pos_encoding = PE2D(self.dim_embed * 4,remove_padding=False)
+        self.embed_actions = nn.Embedding(self.n_tiles, dim_embed,device=device,dtype=UNIT)
         self.embed_state = nn.Embedding(self.n_tiles,dim_embed,device=device,dtype=UNIT)
-
-        self.embed_ln = nn.LayerNorm(dim_embed,device=device,dtype=UNIT)
-
+        # self.embed_time = nn.Embedding(1,4 * dim_embed,device=device,dtype=UNIT)
 
 
-    def forward(self, states, actions, returns_to_go, timesteps, attention_mask=None):
 
+    def forward(self, states, tile_mask, timesteps):
 
-        #BOS   
 
         if states.dim() == 4:
 
             batch_size = states.shape[0]
             states_ = states
-            returns_to_go_ = returns_to_go.unsqueeze(-1)
-            actions_ = actions.unsqueeze(-1)
-            timesteps_ = timesteps.unsqueeze(-1)
+            tiles_ = self.tiles
+            timesteps_ = timesteps.unsqueeze(0)
+            tile_mask = torch.logical_not(tile_mask)
         else:
             batch_size = 1
             states_ = states.unsqueeze(0)
-            actions_ = actions.unsqueeze(0)
-            returns_to_go_ = returns_to_go.unsqueeze(0)
+            tiles_ = self.tiles.unsqueeze(0)
             timesteps_ = timesteps.unsqueeze(0)
+            tile_mask = torch.logical_not(tile_mask.unsqueeze(0))
 
-        # embed each modality with a different head
+        tile_embeddings = self.embed_actions(tiles_)
+        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int()).view(-1,self.n_tiles,self.dim_embed*4)
+        state_embeddings = self.pos_encoding(state_embeddings)
+        tile_embeddings = tile_embeddings.reshape(self.n_tiles,self.dim_embed * 4)
 
-        key_padding_mask = repeat(actions_.squeeze(-1) == -1,'b p -> b (c p)',c=2)
+        tgt_input = tile_embeddings.expand(batch_size,self.n_tiles,self.dim_embed * 4)
 
-
-        actions_embeddings = self.embed_actions(actions_.to(UNIT))
-        returns_embeddings = self.embed_return(returns_to_go_.to(UNIT))
-        time_embeddings = self.embed_timestep(timesteps_)
-
-        actions_embeddings = actions_embeddings + time_embeddings
-        returns_embeddings = returns_embeddings + time_embeddings
-        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
-        stacked_inputs = torch.stack(
-            (returns_embeddings, actions_embeddings), dim=1
-        ).permute(0, 2, 1, 3).reshape(batch_size, 2*self.seq_length, self.dim_embed)
-
-        stacked_inputs = self.embed_ln(stacked_inputs)
-
-        # to make the attention mask fit the stacked inputs, have to stack it as well
-
-        stacked_inputs = self.embed_ln(stacked_inputs)
-        src_key_padding_mask = (torch.arange(self.n_tiles,device=states.device).unsqueeze(1).repeat(4,timesteps_.size()[0]).transpose(0,1) > timesteps_)
-
-        # we feed in the input embeddings (not word indices as in NLP) to the model
         policy_tokens = self.actor_dt(
-            src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
-            tgt=stacked_inputs,
-            src_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=key_padding_mask
+            src=state_embeddings,
+            tgt=tgt_input,
+            tgt_key_padding_mask=tile_mask
         )
 
         value_tokens = self.critic_dt(
-            src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
-            tgt=stacked_inputs,
-            src_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=key_padding_mask
+            src=state_embeddings,
+            tgt=tgt_input,
+            tgt_key_padding_mask=tile_mask
         )
 
-        policy_pred = self.actor_head(policy_tokens)
-        value_pred = self.critic_head(value_tokens)
+        policy_preds = self.detokenize_policy(policy_tokens)
+        value_preds = self.detokenize_value(value_tokens)
 
-        # policy_ouputs = policy_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
-        # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
+        policy = self.actor_head(policy_preds.squeeze(-1))
+        value = self.critic_head(value_preds.squeeze(-1))
 
-        # reshape x so that the second dimension corresponds to the original
-        # returns (0), states (1), or actions (2); i.e. x[:,1,t] is the token for s_t
+        return policy, value
 
-        # get predictions
-        # policy_preds = self.policy_head(x[:,2,-1,:])  # predict next actions given state
-        # value_preds = self.value_head(x[:,1,-1,:])
-
-
-        return policy_pred, value_pred
-
-    def get_action(self, state,policy,return_to_go,timestep):
+    def get_action(self, state,tiles, tile_mask,timestep):
         # we don't care about the past rewards in this model
 
         policy_preds, value_preds = self.forward(
-            state, policy, return_to_go, timestep)
+            state, tiles, tile_mask, timestep)
         
         return policy_preds, value_preds
     
@@ -488,4 +418,4 @@ class PE2D(nn.Module):
         # Combine row and column encodings into a single tensor
         pos_enc = torch.stack((row_encodings, col_encodings), dim=3).view(rows, cols, self.d_model).to(x.device)
 
-        return (pos_enc + x)
+        return (pos_enc.to(UNIT) + x)

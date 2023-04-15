@@ -59,8 +59,9 @@ def train_model(hotstart:str = None):
     'device' : device 
     }
 
+    state, remaining_tiles, n_tiles = initialize_sol(args.instance,device)
 
-    agent = PPOAgent(cfg)
+    agent = PPOAgent(cfg,remaining_tiles)
     agent.model.train()
 
     move_buffer = AdvantageBuffer()
@@ -108,7 +109,6 @@ def train_model(hotstart:str = None):
             state = state.to(dtype=UNIT)
             mask = (torch.zeros_like(remaining_tiles[:,0]) == 0)
             episode_end = False
-            prev_conflicts = get_conflicts(state,bsize)
 
             # print(f"NEW EPISODE : - {episode:>5}")
             conflicts = 0
@@ -122,21 +122,16 @@ def train_model(hotstart:str = None):
 
 
             while not episode_end:
-
-                seq = ep_buf.get_lastk(ep_step)
-
                 with torch.no_grad():
-                    policy, value = agent.model.get_action(
+                    policy, value = agent.model(
                         state,
-                        seq['actions'],
-                        seq['returns_to_go'],
+                        mask,
                         torch.tensor(ep_step,device=device),
                         )
 
                 selected_tile_idx = agent.get_action(policy,mask)
                 tile_importance[selected_tile_idx.cpu()] += (n_tiles-ep_step) / 1000
                 selected_tile = remaining_tiles[selected_tile_idx]
-                mask[selected_tile_idx] = False
                 new_state, new_conf = place_tile(state,selected_tile,ep_step)
 
                 conflicts += new_conf
@@ -162,6 +157,7 @@ def train_model(hotstart:str = None):
                         value=move_buffer.value,
                         next_value=value,
                         reward=move_buffer.reward,
+                        mask=move_buffer.mask,
                         final=0
                     )
 
@@ -184,6 +180,7 @@ def train_model(hotstart:str = None):
                         value=value,
                         next_value=0,
                         reward=reward,
+                        mask=mask,
                         final=1
                     )
                     memory.load(
@@ -225,10 +222,12 @@ def train_model(hotstart:str = None):
                 
                 move_buffer.state = state 
                 move_buffer.action = selected_tile_idx 
-                move_buffer.policy = policy 
+                move_buffer.policy = policy
                 move_buffer.value = value 
                 move_buffer.reward = reward 
+                move_buffer.mask = mask.clone()
 
+                mask[selected_tile_idx] = False
                 state = new_state
 
                 with torch.no_grad():

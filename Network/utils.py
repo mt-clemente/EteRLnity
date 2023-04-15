@@ -24,7 +24,7 @@ def initialize_sol(instance_file:str, device):
 
     pz = EternityPuzzle(instance_file)
     n_tiles = len(pz.piece_list)
-    tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device)
+    tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device).int()
     return torch.zeros((pz.board_size+2,pz.board_size+2,4*COLOR_ENCODING_SIZE),device=device), tiles, n_tiles
 
 
