@@ -128,7 +128,7 @@ def train_model(hotstart:str = None):
                 conflicts += new_conf
 
                 if new_conf == 0:
-                    reward = 3
+                    reward = 5
                     # consec_good_moves += 1
                     # reward = streak(consec_good_moves,n_tiles)
                 elif new_conf == 1:
