@@ -49,8 +49,8 @@ class PPOAgent:
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=self.optimizer,
             start_factor=0.001,
-            end_factor=1.0,
-            total_iters=200,
+            end_factor=0.05,
+            total_iters=2000,
         )
 
     def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
@@ -101,16 +101,13 @@ class PPOAgent:
             drop_last = False
 
 
-        for rtg in mem['rtg_buf']:
-            for r in rtg:
-                wandb.log({
-                    'RTG':r
-                })
+        wandb.log({
+            'RTG':mem['rtg_buf']
+        })
       
-        for adv in mem['adv_buf']:
-            wandb.log({
-                'Adv':adv
-            })
+        wandb.log({
+            'Adv':mem['adv_buf']
+        })
       
 
 
