@@ -337,8 +337,8 @@ class DecisionTransformerAC(nn.Module):
             tgt_key_padding_mask=key_padding_mask
         )
 
-        policy_pred = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps].reshape(batch_size,self.dim_embed*4))
-        value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps].reshape(batch_size,self.dim_embed*4))
+        policy_pred = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
+        value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
 
         # policy_ouputs = policy_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
         # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
