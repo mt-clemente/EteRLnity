@@ -35,8 +35,8 @@ def train_model(hotstart:str = None):
         device = 'cpu'
 
 
-    if not HORIZON % n_tiles:
-        print(UserWarning("Episode length is not a multiple of horizon, will lose the end of the episode"))
+    if HORIZON % n_tiles:
+        print(UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON}), will lose the end of the episode"))
 
 
     cfg = {
@@ -117,8 +117,6 @@ def train_model(hotstart:str = None):
             episode_best_score = 0
             ep_start = step
             ep_step = 0
-            reward_to_go = n_tiles * 3 # approx 2*max_reward
-            ep_buf.rew_buf[0] = reward_to_go
 
 
             while not episode_end:
@@ -142,14 +140,15 @@ def train_model(hotstart:str = None):
                 conflicts += new_conf
 
                 if new_conf == 0:
-                    reward = 2
+                    reward = 3
                     # consec_good_moves += 1
                     # reward = streak(consec_good_moves,n_tiles)
-                else:
+                elif new_conf == 1:
                     consec_good_moves = 0
-                    reward = 2 - new_conf
-                
-                reward_to_go -= reward
+                    reward = 1
+                else :
+                    reward = 0
+
 
                 ep_reward += reward
 
@@ -383,7 +382,7 @@ if __name__ == "__main__"  and '__file__' in globals():
     wandb.init(
         project='EteRLnity',
         entity='mateo-clemente',
-        group='Decision Transformer',
+        group='Tests',
         config=CONFIG
     )
 

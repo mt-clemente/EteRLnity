@@ -52,12 +52,12 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 1
+EPOCHS = 5
 CHECKPOINT_PERIOD = 256*200
-MINIBATCH_SIZE = 20
-HORIZON = 20# in number of steps
+MINIBATCH_SIZE = 49
+HORIZON = 49# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 20
+SEQ_LEN = 49
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 0.99

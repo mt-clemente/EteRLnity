@@ -114,7 +114,7 @@ class EpisodeBuffer:
         self.state_buf = torch.zeros((self.horizon,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
         self.act_buf = torch.zeros((self.horizon+1),dtype=int,device=self.device).to(UNIT) - 1
         self.act_buf[0] = -2 #BOS
-        self.rtg_buf = torch.zeros((self.horizon+1),device=self.device).to(UNIT)
+        self.rtg_buf = torch.zeros((self.horizon+1),device=self.device).to(UNIT) - 20
         self.policy_buf = torch.zeros((self.horizon,self.n_tiles),device=self.device).to(UNIT)
         self.value_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
         self.next_value_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)

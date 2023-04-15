@@ -50,7 +50,7 @@ class PPOAgent:
             optimizer=self.optimizer,
             start_factor=0.001,
             end_factor=1.0,
-            total_iters=20000,
+            total_iters=200,
         )
 
     def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
@@ -90,7 +90,7 @@ class PPOAgent:
             mem['rtg_buf'].to(training_device),
             mem['adv_buf'].to(training_device),
             mem['policy_buf'].to(training_device),
-            mem['value_buf'].to(training_device),
+            mem['rtg_buf'][-1,:-1].to(training_device), # Returns to go for the whole episode
             mem['timestep_buf'].to(training_device),
         )
 
@@ -101,11 +101,21 @@ class PPOAgent:
             drop_last = False
 
 
+        for rtg in mem['rtg_buf']:
+            for r in rtg:
+                wandb.log({
+                    'RTG':r
+                })
+      
+        for adv in mem['adv_buf']:
+            wandb.log({
+                'Adv':adv
+            })
+      
 
 
 
-
-        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=True, drop_last=drop_last)
+        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False, drop_last=drop_last)
         
 
         # Perform multiple update epochs
@@ -118,7 +128,7 @@ class PPOAgent:
                     batch_rtg_seq,
                     batch_advantages,
                     batch_old_policies,
-                    batch_values,
+                    batch_returns,
                     batch_timesteps,
                     
                 ) = batch
@@ -132,8 +142,6 @@ class PPOAgent:
                 # Remove the actions taken to get the action sequence that was used for inference
                 # for sequences with padding
                 batch_actions_seq[has_padding,batch_timesteps[has_padding]+1] = -1
-
-                batch_returns = batch_advantages + batch_values
 
                 batch_policy, batch_value = self.model(
                     batch_states,
@@ -327,7 +335,7 @@ class DecisionTransformerAC(nn.Module):
         self.embed_return = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
         self.embed_actions = torch.nn.Linear(1, dim_embed,device=device,dtype=UNIT)
         self.embed_state = nn.Embedding(self.n_tiles,dim_embed,device=device,dtype=UNIT)
-
+        self.positional_encoding = PE2D(dim_embed,remove_padding=False)
         self.embed_ln = nn.LayerNorm(dim_embed,device=device,dtype=UNIT)
 
 
@@ -362,7 +370,8 @@ class DecisionTransformerAC(nn.Module):
 
         actions_embeddings = actions_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
-        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
+        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int()).view(-1,self.n_tiles * 4,self.dim_embed)
+        state_embeddings = self.positional_encoding(state_embeddings)
         stacked_inputs = torch.stack(
             (returns_embeddings, actions_embeddings), dim=1
         ).permute(0, 2, 1, 3).reshape(batch_size, 2*self.seq_length, self.dim_embed)
@@ -376,7 +385,7 @@ class DecisionTransformerAC(nn.Module):
 
         # we feed in the input embeddings (not word indices as in NLP) to the model
         policy_tokens = self.actor_dt(
-            src=state_embeddings.view(-1,self.n_tiles * 4,self.dim_embed),
+            src=state_embeddings,
             tgt=stacked_inputs,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=key_padding_mask
@@ -486,6 +495,6 @@ class PE2D(nn.Module):
         col_encodings = torch.cos(col_coords * torch.exp(col_freqs))
         
         # Combine row and column encodings into a single tensor
-        pos_enc = torch.stack((row_encodings, col_encodings), dim=3).view(rows, cols, self.d_model).to(x.device)
+        pos_enc = torch.stack((row_encodings, col_encodings), dim=3).view(rows, cols, self.d_model).to(x.device).to(x.dtype)
 
         return (pos_enc + x)
