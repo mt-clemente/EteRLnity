@@ -48,8 +48,8 @@ class PPOAgent:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=self.optimizer,
-            start_factor=0.001,
-            end_factor=0.2,
+            start_factor=0.1,
+            end_factor=1,
             total_iters=10000,
         )
 
@@ -99,7 +99,10 @@ class PPOAgent:
         else:
             drop_last = False
 
-
+        wandb.log({
+            'Advantages':mem.adv_buf.to(training_device),
+            'Returns to go':mem.rtg_buf.to(training_device),
+        })
 
         loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False, drop_last=drop_last)
         
@@ -179,6 +182,7 @@ class PPOAgent:
                     # print(f"{name:>28}")
                     g+=torch.norm(param.grad)
 
+        print(batch_value)
                     
         print(datetime.now()-t0)
         wandb.log({
@@ -188,9 +192,7 @@ class PPOAgent:
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
-            "Advantages":batch_advantages,
-            "Returns to go":batch_returns,
-            "values":batch_value,
+            "values":batch_value.squeeze(-1),
             "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-8) - torch.log(batch_policy + 1e-8))).sum(dim=-1).mean()
             })
 
@@ -280,10 +282,10 @@ class DecisionTransformerAC(nn.Module):
         self.critic_dt.apply(init_weights)
         # Apply the initialization to the sublayers of the transformer layers
 
-        wandb.watch(self.actor_dt,log='all',log_freq=50)
-        wandb.watch(self.actor_head,log='all',log_freq=50)
-        wandb.watch(self.critic_dt,log='all',log_freq=50)
-        wandb.watch(self.critic_head,log='all',log_freq=50)
+        wandb.watch(self.actor_dt,log='all',log_freq=500)
+        wandb.watch(self.actor_head,log='all',log_freq=500)
+        wandb.watch(self.critic_dt,log='all',log_freq=500)
+        wandb.watch(self.critic_head,log='all',log_freq=500)
             
         self.dim_embed = dim_embed 
         self.embed_timestep = nn.Embedding(self.n_tiles, 4*dim_embed,device=device,dtype=UNIT)
