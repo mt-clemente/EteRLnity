@@ -65,15 +65,6 @@ def train_model(hotstart:str = None):
 
     move_buffer = AdvantageBuffer()
     
-    memory = BatchMemory(
-        n_tiles=n_tiles,
-        bsize=bsize+2,
-        horizon=HORIZON,
-        capacity=n_tiles,
-        seq_len=SEQ_LEN,
-        device=device
-    )
-
     ep_buf = EpisodeBuffer(
         ep_len=n_tiles,
         n_tiles=n_tiles,
@@ -121,16 +112,13 @@ def train_model(hotstart:str = None):
 
             while not episode_end:
 
-                seq = ep_buf.get_lastk(ep_step)
-
                 with torch.no_grad():
                     policy, value = agent.model.get_action(
-                        state,
-                        seq['actions'],
-                        seq['returns_to_go'],
+                        ep_buf.state_buf[ep_buf.ptr-1],
+                        ep_buf.tile_seq[ep_buf.ptr-1],
                         torch.tensor(ep_step,device=device),
                         )
-
+            
                 selected_tile_idx = agent.get_action(policy,mask)
                 tile_importance[selected_tile_idx.cpu()] += (n_tiles-ep_step) / 1000
                 selected_tile = remaining_tiles[selected_tile_idx]
@@ -157,17 +145,15 @@ def train_model(hotstart:str = None):
                     ep_buf.push(
                         state=move_buffer.state,
                         action=move_buffer.action,
+                        tile=move_buffer.tile,
                         policy=move_buffer.policy,
                         value=move_buffer.value,
                         next_value=value,
                         reward=move_buffer.reward,
+                        ep_step=ep_step,
                         final=0
                     )
 
-                    memory.load(
-                        ep_buf,
-                        ep_step
-                    )
 
                 
                 # list_sol = to_list(new_state,bsize)
@@ -179,17 +165,15 @@ def train_model(hotstart:str = None):
                     ep_buf.push(
                         state=state,
                         action=selected_tile_idx,
+                        tile=selected_tile,
                         policy=policy,
                         value=value,
                         next_value=0,
                         reward=reward,
+                        ep_step=ep_step,
                         final=1
                     )
-                    memory.load(
-                        ep_buf,
-                        ep_step+1
-                    )
-                    
+
 
                     # Compute the advantages once the epsiode is done.
 
@@ -211,20 +195,19 @@ def train_model(hotstart:str = None):
 
                     
                 if (step) % HORIZON == 0 and ep_step != 0 or (step + 1)% HORIZON==0 and episode_end:
-                    memory.load_advantages_rtg(ep_buf)
+
                     agent.update(
-                        mem=memory
+                        mem=ep_buf
                     )
                     ep_buf.reset()
-                    if n_tiles - ep_step < HORIZON or episode_end:
-                        memory.reset()
 
 
 
                 
                 move_buffer.state = state 
-                move_buffer.action = selected_tile_idx 
+                move_buffer.action = selected_tile_idx
                 move_buffer.policy = policy 
+                move_buffer.tile = selected_tile
                 move_buffer.value = value 
                 move_buffer.reward = reward 
 

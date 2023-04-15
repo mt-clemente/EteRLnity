@@ -28,10 +28,12 @@ class EpisodeBuffer:
             self,
             state,
             action,
+            tile,
             policy,
             value,
             next_value,
             reward,
+            ep_step,
             final
             ):
 
@@ -40,8 +42,19 @@ class EpisodeBuffer:
         self.value_buf[self.ptr] = value
         self.next_value_buf[self.ptr] = next_value
         self.rew_buf[self.ptr] = reward
-        self.act_buf[self.ptr+1] = action
+        self.timestep_buf[self.ptr] = ep_step
         self.final_buf[self.ptr] = final
+        self.act_buf[self.ptr] = action
+        self.tile_buf[self.ptr + 1] = tile
+
+        if self.ptr < self.seq_len+1:
+            bot = 0
+            top = self.seq_len+1
+        else:
+            bot = self.ptr-self.seq_len-1
+            top = self.ptr
+        self.tile_seq[self.ptr] = self.tile_buf[bot:top]
+
 
         self.ptr += 1
 
@@ -49,30 +62,6 @@ class EpisodeBuffer:
             self.compute_gae_rtg(self.gamma,self.gae_lambda)
 
 
-    def get_lastk(self,step:int,k:int = None):
-        #FIXME: add padding
-        if k is None:
-            k = self.seq_len
-
-        if self.ptr >= k:
-            bot = self.ptr-k
-            top = self.ptr
-        
-        else:
-            bot = 0
-            top = k
-
-        states = self.state_buf[self.ptr]
-        actions = self.act_buf.unsqueeze(-1)[bot:top]
-        returns_to_go = self.rtg_buf.unsqueeze(-1)[bot:top]
-        return {
-            'actions':actions.to(UNIT),
-            'states':states.to(UNIT),
-            'returns_to_go':returns_to_go.to(UNIT),
-            'timesteps':torch.arange(k+1,device=states.device) + step
-        }
-    
-        
     def compute_gae_rtg(self,  gamma, gae_lambda): #FIXME:MASKS?
 
         if (self.ptr) % self.horizon != 0:
@@ -111,75 +100,22 @@ class EpisodeBuffer:
 
 
     def reset(self):
-        self.state_buf = torch.zeros((self.horizon,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
-        self.act_buf = torch.zeros((self.horizon+1),dtype=int,device=self.device).to(UNIT) - 1
-        self.act_buf[0] = -2 #BOS
-        self.rtg_buf = torch.zeros((self.horizon+1),device=self.device).to(UNIT) - 20
-        self.policy_buf = torch.zeros((self.horizon,self.n_tiles),device=self.device).to(UNIT)
-        self.value_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
-        self.next_value_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
-        self.rew_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
-        self.final_buf = torch.zeros((self.horizon),dtype=int,device=self.device).to(UNIT)
-        self.adv_buf = torch.zeros((self.horizon),device=self.device).to(UNIT)
+        self.state_buf = torch.zeros((self.ep_len,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
+        self.act_buf = torch.zeros((self.ep_len),dtype=int,device=self.device) - 1
+        self.tile_buf = torch.zeros((self.ep_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
+        self.tile_buf[0,:] = -2 #BOS
+        self.tile_seq = torch.zeros((self.ep_len,self.seq_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
+        self.tile_seq[:,0,:] = -2 #BOS
+        self.rtg_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT) - 20
+        self.policy_buf = torch.zeros((self.ep_len,self.n_tiles),device=self.device).to(UNIT)
+        self.value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.next_value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.rew_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.final_buf = torch.zeros((self.ep_len),dtype=int,device=self.device)
+        self.adv_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
+        self.timestep_buf = torch.zeros((self.ep_len),device=self.device,dtype=int)
         self.ptr = 0
 
-class BatchMemory:
-    """
-    Helpfull buffer for decision transformers, might be able to manage with only episode buffer for other network architectures
-    """
-    def __init__(self,n_tiles:int,bsize:int, seq_len:int,capacity:int,horizon:int,device='cpu') -> None:
-        self.capacity = capacity
-        self.horizon = horizon
-        self.n_tiles = n_tiles
-        self.seq_len = seq_len
-        self.device = device
-        self.bsize = bsize
-        self.ptr = 0
-        self.reset()
-
-
-    def load(self,buff:EpisodeBuffer,step:int):
-
-        # pad for the unfinished trajectories
-        k = self.seq_len
-
-        if buff.ptr >= k+1:
-            bot = buff.ptr-1-k
-            top = buff.ptr
-        
-        else:
-            bot = 0
-            top = k+1
-
-        self.act_buf[self.ptr] = buff.act_buf.squeeze(-1)[bot:top]
-        self.state_buf[self.ptr] = buff.state_buf[buff.ptr - 1]
-        self.timestep_buf[self.ptr] = buff.ptr - 1
-        self.policy_buf[self.ptr] = buff.policy_buf[buff.ptr - 1]
-        self.value_buf[self.ptr] = buff.value_buf[buff.ptr - 1]
-        self.ptr += 1
-
-    def load_advantages_rtg(self,ep_buf:EpisodeBuffer): #FIXME:
-        if ep_buf.ptr != ep_buf.ep_len:
-            raise IndexError(ep_buf.ptr,ep_buf.ep_len)
-
-        self.adv_buf[self.ptr - self.horizon:self.ptr] = ep_buf.adv_buf
-        self.rtg_buf[self.ptr - self.horizon:self.ptr] = ep_buf.rtg_buf[-self.seq_len-1:]
-
-
-
-
-    def reset(self):
-
-        if self.ptr != self.capacity:
-            print(Warning(f'Memory not full : {self.ptr}/{self.capacity}'))
-        self.state_buf = torch.empty((self.capacity,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
-        self.act_buf = torch.empty((self.capacity,self.seq_len+1),dtype=int,device=self.device)
-        self.rtg_buf = torch.empty((self.capacity,self.seq_len+1),device=self.device).to(UNIT)
-        self.policy_buf = torch.empty((self.capacity,self.n_tiles),device=self.device).to(UNIT)
-        self.adv_buf = torch.zeros((self.capacity),device=self.device).to(UNIT)
-        self.value_buf = torch.empty((self.capacity),device=self.device).to(UNIT)
-        self.timestep_buf = torch.empty((self.capacity),dtype=int,device=self.device)
-        self.ptr = 0
 
     def __getitem__(self,key):
         return getattr(self,key)[self.ptr-self.horizon:self.ptr]
@@ -194,6 +130,7 @@ class AdvantageBuffer():
         self.action = None
         self.policy = None
         self.value = None
+        self.tile = None
         self.reward = None
         self.reward_to_go = None
 
