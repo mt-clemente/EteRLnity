@@ -21,11 +21,11 @@ N_COLORS = 23
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-DIM_EMBED= 64
-HIDDEN_SIZE = 128
-N_LAYERS = 2
-N_DECODE_LAYERS = 1
-N_HEADS = 2
+DIM_EMBED= 3 * 32
+HIDDEN_SIZE = 1024
+N_LAYERS = 4
+N_DECODE_LAYERS = 4
+N_HEADS = 8
 GAE_LAMBDA = 0.9
 ENTROPY_WEIGHT = 0.0001
 VALUE_WEIGHT = 2
@@ -52,12 +52,12 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 5
+EPOCHS = 15
 CHECKPOINT_PERIOD = 256*200
-MINIBATCH_SIZE = 16
-HORIZON = 16# in number of steps
+MINIBATCH_SIZE = 4
+HORIZON = 4# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 16
+SEQ_LEN = 4
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 0.92

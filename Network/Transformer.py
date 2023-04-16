@@ -1,5 +1,6 @@
 import math
 from matplotlib import pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 from datetime import datetime
@@ -283,7 +284,7 @@ class DecisionTransformerAC(nn.Module):
         self.embed_timestep = nn.Embedding(self.n_tiles, 4*dim_embed,device=device,dtype=UNIT)
         self.embed_actions = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
         self.embed_state = nn.Embedding(N_COLORS,dim_embed,device=device,dtype=UNIT)
-        self.positional_encoding = PE2D(4*dim_embed,remove_padding=False)
+        self.positional_encoding = PE3D(dim_embed)
         self.embed_ln = nn.LayerNorm(4*dim_embed,eps=1e-5,device=device,dtype=UNIT)
 
 
@@ -311,8 +312,9 @@ class DecisionTransformerAC(nn.Module):
         actions_embeddings = self.embed_actions(actions_.int() + 2).reshape(batch_size, self.seq_length + 1,self.dim_embed * 4)
         time_embeddings = self.embed_timestep(timesteps_)
         actions_embeddings = actions_embeddings + time_embeddings
-        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int()).view(-1,self.n_tiles,self.dim_embed * 4)
-        state_embeddings = self.positional_encoding(state_embeddings)
+        state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
+        state_embeddings += self.positional_encoding(state_embeddings)
+        state_embeddings = state_embeddings.view(-1,self.n_tiles,self.dim_embed * 4)
 
         tgt_inputs = self.embed_ln(actions_embeddings)
 
@@ -383,55 +385,56 @@ class MaskedStableSoftmax(nn.Module):
         logits = logits - logits.max(dim=-1, keepdim=True).values
         return torch.softmax(logits - self.eps* torch.logical_not(mask),-1) 
 
-class PE2D(nn.Module):
-
-    def __init__(self, d_model, remove_padding=True) -> None:
-        super().__init__()
-        self.d_model = d_model
-        self.remove_padding = remove_padding
-
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
-
+class PE3D(nn.Module):
+    def __init__(self, channels):
         """
-        Generate a 2D sinusoidal positional encoding for an input of size
-        [...,row,column,features]
-        
-        Args:
-            rows (int): Number of rows in the 2D grid.
-            cols (int): Number of columns in the 2D grid.
-            d_model (int): Dimension of the encoding vector.
-            
-        Returns:
-            pos_enc (torch.Tensor): The 2D positional encoding of shape (rows, cols, d_model).
+        :param channels: The last dimension of the tensor you want to apply pos emb to.
         """
+        super(PE3D, self).__init__()
+        self.org_channels = channels
+        channels = int(np.ceil(channels / 6) * 2)
+        if channels % 2:
+            channels += 1
+        self.channels = channels
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
+        self.register_buffer("inv_freq", inv_freq)
+        self.cached_penc = None
 
-        if self.remove_padding:
-            #batched
-            if x.dim() == 5:
-                x = x[:,:,1:-1,1:-1,:]
-            else:
-                x = x[:,1:-1,1:-1,:]
+    def forward(self, tensor):
+        """
+        :param tensor: A 5d tensor of size (batch_size, x, y, z, ch)
+        :return: Positional Encoding Matrix of size (batch_size, x, y, z, ch)
+        """
+        if len(tensor.shape) != 5:
+            raise RuntimeError("The input tensor has to be 5d!")
 
-        rows, cols = x.size()[-3:-1]
+        if self.cached_penc is not None and self.cached_penc.shape == tensor.shape:
+            return self.cached_penc
 
-        assert self.d_model % 2 == 0, "self.d_model should be even."
+        self.cached_penc = None
+        batch_size, x, y, z, orig_ch = tensor.shape
+        pos_x = torch.arange(x, device=tensor.device).type(self.inv_freq.type())
+        pos_y = torch.arange(y, device=tensor.device).type(self.inv_freq.type())
+        pos_z = torch.arange(z, device=tensor.device).type(self.inv_freq.type())
+        sin_inp_x = torch.einsum("i,j->ij", pos_x, self.inv_freq)
+        sin_inp_y = torch.einsum("i,j->ij", pos_y, self.inv_freq)
+        sin_inp_z = torch.einsum("i,j->ij", pos_z, self.inv_freq)
+        emb_x = self.get_emb(sin_inp_x).unsqueeze(1).unsqueeze(1)
+        emb_y = self.get_emb(sin_inp_y).unsqueeze(1)
+        emb_z = self.get_emb(sin_inp_z)
+        emb = torch.zeros((x, y, z, self.channels * 3), device=tensor.device).type(
+            tensor.type()
+        )
+        emb[:, :, :, : self.channels] = emb_x
+        emb[:, :, :, self.channels : 2 * self.channels] = emb_y
+        emb[:, :, :, 2 * self.channels :] = emb_z
 
-        # Generate row and column coordinates
-        row_coords, col_coords = torch.meshgrid(torch.arange(rows), torch.arange(cols),indexing='ij')
-        
-        # Expand to match the required encoding dimensions
-        row_coords = row_coords.unsqueeze(-1).repeat(1, 1, self.d_model // 2)
-        col_coords = col_coords.unsqueeze(-1).repeat(1, 1, self.d_model // 2)
-
-        # Calculate the encoding frequencies for rows and columns
-        row_freqs = torch.arange(0, self.d_model, 2).float() * -(math.log(10000.0) / self.d_model)
-        col_freqs = torch.arange(1, self.d_model, 2).float() * -(math.log(10000.0) / self.d_model)
-        
-        # Calculate the sinusoidal encodings for row and column coordinates
-        row_encodings = torch.sin(row_coords * torch.exp(row_freqs))
-        col_encodings = torch.cos(col_coords * torch.exp(col_freqs))
-        
-        # Combine row and column encodings into a single tensor
-        pos_enc = torch.stack((row_encodings, col_encodings), dim=3).view(rows, cols, self.d_model).to(x.device).to(x.dtype)
-
-        return (pos_enc + x)
+        self.cached_penc = emb[None, :, :, :, :orig_ch].repeat(batch_size, 1, 1, 1, 1)
+        return self.cached_penc
+    
+    def get_emb(self,sin_inp):
+        """
+        Gets a base embedding for one dimension with sin and cos intertwined
+        """
+        emb = torch.stack((sin_inp.sin(), sin_inp.cos()), dim=-1)
+        return torch.flatten(emb, -2, -1)
