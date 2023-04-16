@@ -30,6 +30,7 @@ class EpisodeBuffer:
             action,
             tile,
             policy,
+            tile_mask,
             value,
             next_value,
             reward,
@@ -39,6 +40,7 @@ class EpisodeBuffer:
 
         self.state_buf[self.ptr] = state
         self.policy_buf[self.ptr] = policy
+        self.mask_buf[self.ptr] = tile_mask
         self.value_buf[self.ptr] = value
         self.next_value_buf[self.ptr] = next_value
         self.rew_buf[self.ptr] = reward
@@ -108,6 +110,7 @@ class EpisodeBuffer:
         self.tile_seq[:,0,:] = -2 #BOS
         self.rtg_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT) - 20
         self.policy_buf = torch.zeros((self.ep_len,self.n_tiles),device=self.device).to(UNIT)
+        self.mask_buf = torch.zeros((self.ep_len,self.n_tiles),dtype=bool,device=self.device)
         self.value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
         self.next_value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
         self.rew_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
@@ -133,6 +136,7 @@ class AdvantageBuffer():
         self.tile = None
         self.reward = None
         self.reward_to_go = None
+        self.tile_mask = None
 
 
 

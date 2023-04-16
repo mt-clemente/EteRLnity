@@ -102,40 +102,28 @@ def train_model(hotstart:str = None):
             prev_conflicts = get_conflicts(state,bsize)
 
             # print(f"NEW EPISODE : - {episode:>5}")
-            conflicts = 0
             ep_reward = 0
-            consec_good_moves = 0
+            connections = 0
             episode_best_score = 0
             ep_start = step
             ep_step = 0
 
 
             while not episode_end:
-
+                
                 with torch.no_grad():
                     policy, value = agent.model.get_action(
                         ep_buf.state_buf[ep_buf.ptr-1],
                         ep_buf.tile_seq[ep_buf.ptr-1],
                         torch.tensor(ep_step,device=device),
+                        mask,
                         )
             
-                selected_tile_idx = agent.get_action(policy,mask)
+                selected_tile_idx = agent.get_action(policy)
                 tile_importance[selected_tile_idx.cpu()] += (n_tiles-ep_step) / 1000
                 selected_tile = remaining_tiles[selected_tile_idx]
-                mask[selected_tile_idx] = False
-                new_state, new_conf = place_tile(state,selected_tile,ep_step)
-
-                conflicts += new_conf
-
-                if new_conf == 0:
-                    reward = 5
-                    # consec_good_moves += 1
-                    # reward = streak(consec_good_moves,n_tiles)
-                elif new_conf == 1:
-                    consec_good_moves = 0
-                    reward = 1
-                else :
-                    reward = 0
+                new_state, reward, connect = place_tile(state,selected_tile,ep_step)
+                connections += connect
 
 
                 ep_reward += reward
@@ -146,6 +134,7 @@ def train_model(hotstart:str = None):
                         state=move_buffer.state,
                         action=move_buffer.action,
                         tile=move_buffer.tile,
+                        tile_mask=move_buffer.tile_mask,
                         policy=move_buffer.policy,
                         value=move_buffer.value,
                         next_value=value,
@@ -155,17 +144,16 @@ def train_model(hotstart:str = None):
                     )
 
 
-                
                 # list_sol = to_list(new_state,bsize)
                 # pz.display_solution(list_sol,f"{step}")
                 if ep_step == n_tiles-1:
 
                     # print(pz.verify_solution(list_sol))
-
                     ep_buf.push(
                         state=state,
                         action=selected_tile_idx,
                         tile=selected_tile,
+                        tile_mask=mask,
                         policy=policy,
                         value=value,
                         next_value=0,
@@ -181,13 +169,13 @@ def train_model(hotstart:str = None):
                     curr_valid_state = new_state
 
                     if episode % 1 == 0:
-                        print(f"END EPISODE {episode} - Conflicts {conflicts}/{bsize * 2 *(bsize+1)}")
+                        print(f"END EPISODE {episode} - Connections {connections}/{bsize * 2 *(bsize+1)}")
                     episode_end = True
                     episode += 1
 
                     wandb.log({
                         "Mean episode reward":ep_reward/(step - ep_start + 1e-5),
-                        'Final conflicts':conflicts,
+                        'Final connections':connections,
                         'Tile rank':(tile_importance - tile_importance.mean() )/ (tile_importance.std() + 1e-5)
                         }
                         )
@@ -209,8 +197,10 @@ def train_model(hotstart:str = None):
                 move_buffer.policy = policy 
                 move_buffer.tile = selected_tile
                 move_buffer.value = value 
-                move_buffer.reward = reward 
+                move_buffer.reward = reward
+                move_buffer.tile_mask = mask.clone() #FIXME: Clone?
 
+                mask[selected_tile_idx] = False
                 state = new_state
 
                 with torch.no_grad():
@@ -258,23 +248,25 @@ def place_tile(state:Tensor,tile:Tensor,step:int):
 
     state = state.clone()
     bsize = state.size()[0] - 2
-    best_conf = 540
-    for dir in range(4):
+    best_rew = -1
+    best_connect = 0
+    for _ in range(4):
         tile = tile.roll(COLOR_ENCODING_SIZE,-1)
         state[step // bsize + 1, step % bsize + 1,:] = tile
-        conf = filling_conflicts(state,bsize,step)
-        if conf < best_conf:
+        connect,reward = filling_connections(state,bsize,step)
+        if reward > best_rew:
             best_state=state.clone()
-            best_conf=conf
+            best_rew=reward
+            best_connect = connect
 
-    return best_state, best_conf
+    return best_state, best_rew, best_connect
 
 def streak(streak_length:int, n_tiles):
     return (2 - exp(-streak_length * 3/(0.8 * n_tiles)))
 
 
 
-def filling_conflicts(state:Tensor, bsize:int, step):
+def filling_connections(state:Tensor, bsize:int, step):
     i = step // bsize + 1
     j = step % bsize + 1
     west_tile_color = state[i,j-1,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
@@ -283,39 +275,46 @@ def filling_conflicts(state:Tensor, bsize:int, step):
     west_border_color = state[i,j,1*COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
     south_border_color = state[i,j,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
 
-    conf = 0
+    connections = 0
+    reward = 0
 
     if j == 1:
-        if not torch.all(west_border_color == 0):
-            conf += 1
+        if torch.all(west_border_color == 0):
+            reward += 2
+            connections += 1
     
-    elif not torch.all(west_border_color == west_tile_color):
-        conf += 1
+    elif torch.all(west_border_color == west_tile_color):
+        connections += 1
+        reward += 1
 
     if i == 1:
-        if not torch.all(south_border_color == 0):
-            conf += 1
+        if torch.all(south_border_color == 0):
+            connections += 1
+            reward += 2
     
-    elif not torch.all(south_border_color == south_tile_color):
-        conf += 1
+    elif torch.all(south_border_color == south_tile_color):
+        connections += 1
+        reward += 1
    
    
     if j == bsize:
 
         east_border_color = state[i,j,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
 
-        if not torch.all(east_border_color == 0):
-            conf += 1
+        if torch.all(east_border_color == 0):
+            connections += 1
+            reward += 2
     
 
     if i == bsize:
 
         north_border_color = state[i,j,:COLOR_ENCODING_SIZE]
-        if not torch.all(north_border_color == 0):
-            conf += 1
+        if torch.all(north_border_color == 0):
+            reward += 2
+            connections += 1
     
 
-    return conf
+    return connections, reward
         
         
 

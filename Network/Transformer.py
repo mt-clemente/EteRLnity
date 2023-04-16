@@ -45,21 +45,16 @@ class PPOAgent:
             )
         
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
+        self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=self.optimizer,
-            start_factor=0.1,
+            start_factor=0.01,
             end_factor=1,
             total_iters=10000,
         )
 
-    def get_action(self, policy:torch.Tensor,mask:torch.BoolTensor):
-
-        if mask.count_nonzero() == 0:
-            raise Exception("No playable tile")
-        sm = torch.softmax(policy,-1) * mask
-        sm /= sm.sum(dim=-1, keepdim=True)
-        return torch.multinomial(sm,1)
+    def get_action(self, policy:torch.Tensor):
+        return torch.multinomial(policy,1)
         
 
     # def update(self, states, actions, old_policies, values, advantages, returns):
@@ -87,6 +82,7 @@ class PPOAgent:
             mem.state_buf.to(training_device),
             mem.act_buf.to(training_device),#BOS action is not 'taken'
             mem.tile_seq.to(training_device),#BOS action is not 'taken'
+            mem.mask_buf.to(training_device),#BOS action is not 'taken'
             mem.adv_buf.to(training_device),
             mem.policy_buf.to(training_device),
             mem.rtg_buf.to(training_device), # Returns to go for the whole episode
@@ -115,6 +111,7 @@ class PPOAgent:
                     batch_states,
                     batch_actions,
                     batch_tile_seq,
+                    batch_masks,
                     batch_advantages,
                     batch_old_policies,
                     batch_returns,
@@ -127,6 +124,7 @@ class PPOAgent:
                     batch_states,
                     batch_tile_seq,
                     batch_timesteps,
+                    batch_masks,
                 )
 
                 # batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
@@ -135,7 +133,7 @@ class PPOAgent:
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
                 old_action_probs = batch_old_policies.gather(1, batch_actions.unsqueeze(1))
-                ratio = action_probs / (old_action_probs + 1e-4)
+                ratio = action_probs / (old_action_probs + 1e-5)
                 clipped_ratio = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps)
                 surrogate1 = ratio * batch_advantages.unsqueeze(1)
                 surrogate2 = clipped_ratio * batch_advantages.unsqueeze(1)
@@ -182,8 +180,6 @@ class PPOAgent:
                     # print(f"{name:>28}")
                     g+=torch.norm(param.grad)
 
-        print(batch_value)
-                    
         print(datetime.now()-t0)
         wandb.log({
             "Total loss":loss,
@@ -192,7 +188,7 @@ class PPOAgent:
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
-            "values":batch_value.squeeze(-1),
+            "values":batch_value.squeeze(-1).detach(),
             "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-8) - torch.log(batch_policy + 1e-8))).sum(dim=-1).mean()
             })
 
@@ -256,16 +252,12 @@ class DecisionTransformerAC(nn.Module):
 
         self.actor_head = nn.Sequential(
             nn.GELU(),
-            nn.Linear(4*dim_embed, 256,device=device,dtype=UNIT),
-            nn.GELU(),
-            nn.Linear(256, act_dim,device=device,dtype=UNIT),
-            SoftmaxStable()
+            nn.Linear(4*dim_embed,act_dim,device=device,dtype=UNIT),
         )
+        self.policy_head = MaskedStableSoftmax()
+
         self.critic_head = nn.Sequential(
-            nn.GELU(),
-            nn.Linear(4*dim_embed, 256,device=device,dtype=UNIT),
-            nn.GELU(),
-            nn.Linear(256, 1,device=device,dtype=UNIT),
+            nn.Linear(4*dim_embed, 1,device=device,dtype=UNIT),
         )
 
         def init_weights(module):
@@ -296,7 +288,7 @@ class DecisionTransformerAC(nn.Module):
 
 
 
-    def forward(self, states, actions, timesteps, attention_mask=None):
+    def forward(self, states, actions, timesteps, tile_mask, attention_mask=None):
 
 
         #BOS   
@@ -337,8 +329,9 @@ class DecisionTransformerAC(nn.Module):
             tgt_key_padding_mask=key_padding_mask
         )
 
-        policy_pred = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
-        value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
+        policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
+        policy_pred = self.policy_head(policy_logits,tile_mask)
+        value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
 
         # policy_ouputs = policy_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
         # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
@@ -352,11 +345,11 @@ class DecisionTransformerAC(nn.Module):
 
         return policy_pred, value_pred
 
-    def get_action(self, state,actions,timestep):
+    def get_action(self, state,actions,timestep,mask):
         # we don't care about the past rewards in this model
 
         policy_preds, value_preds = self.forward(
-            state, actions, timestep)
+            state, actions, timestep, mask)
         
         return policy_preds, value_preds
     
@@ -379,10 +372,16 @@ class View(nn.Module):
     def forward(self, input):
         return input.view(self.shape)
 
-class SoftmaxStable(nn.Module):
-    def forward(self, x):
-        x = x - x.max(dim=-1, keepdim=True).values
-        return F.softmax(x, dim=-1)
+class MaskedStableSoftmax(nn.Module):
+    def __init__(self, eps = 1e5) -> None:
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, logits,mask):
+        if mask.count_nonzero() == 0:
+            raise Exception("No playable tile")
+        logits = logits - logits.max(dim=-1, keepdim=True).values
+        return torch.softmax(logits - self.eps* torch.logical_not(mask),-1) 
 
 class PE2D(nn.Module):
 
