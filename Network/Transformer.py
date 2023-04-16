@@ -96,8 +96,8 @@ class PPOAgent:
             drop_last = False
 
         wandb.log({
-            'Advantages':mem.adv_buf.to(training_device),
-            'Returns to go':mem.rtg_buf.to(training_device),
+            'Advantages repartition':mem.adv_buf.to(training_device),
+            'Returns to go repartition':mem.rtg_buf.to(training_device),
         })
 
         loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False, drop_last=drop_last)
@@ -188,8 +188,8 @@ class PPOAgent:
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
-            "values":batch_value.squeeze(-1).detach(),
-            "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-8) - torch.log(batch_policy + 1e-8))).sum(dim=-1).mean()
+            "Value repartition":batch_value.squeeze(-1).detach(),
+            "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })
 
         if not CUDA_ONLY:

@@ -207,13 +207,18 @@ def train_model(hotstart:str = None):
                     policy_prob = policy[policy != 0]
                     policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
 
-                if step % LOG_EVERY==0:
+                if step%LOG_EVERY ==0:
+                    wandb.log(
+                        {   
+                        'Reward': reward,
+                        }
+                    )
+                if ep_step == 0:
 
                     wandb.log(
                         {   
                             'Relative policy entropy': policy_entropy/max_entropy,
                             'Value': value,
-                            'Reward': reward,
                         }
                     )
 
