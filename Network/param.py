@@ -22,13 +22,13 @@ N_COLORS = 23
 # -------------------- NETWORK SETTINGS -------------------- 
 
 DIM_EMBED= 15
-HIDDEN_SIZE = 2048
-N_LAYERS = 8
-N_DECODE_LAYERS = 6
-N_HEADS = 6
+HIDDEN_SIZE = 128
+N_ENCODER_LAYERS = 1
+N_DECODER_LAYERS = 1
+N_HEADS = 5
 GAE_LAMBDA = 0.92
-ENTROPY_WEIGHT = 0.001
-VALUE_WEIGHT = 2
+ENTROPY_WEIGHT = 0.01
+VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
 
 # --------------------  SETTINGS -------------------- 
@@ -37,9 +37,9 @@ DEBUG = False
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = True
-CPU_TRAINING = False
-UNIT = torch.half
+CUDA_ONLY = False
+CPU_TRAINING = True
+UNIT = torch.float
 
 ENCODING = 'ordinal'
 
@@ -54,10 +54,10 @@ else:
   
 EPOCHS = 8
 CHECKPOINT_PERIOD = 256*200
-MINIBATCH_SIZE = 81
-HORIZON = 81# in number of steps
+MINIBATCH_SIZE = 27
+HORIZON = 27# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 81
+SEQ_LEN = 27
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 0.92
@@ -70,8 +70,8 @@ CONFIG = {
     'Gamma':GAMMA,
     'DIM_EMBED':DIM_EMBED,
     'HIDDEN_SIZE':HIDDEN_SIZE,
-    'Encoder layers':N_LAYERS,
-    'Decoder layers':N_DECODE_LAYERS,
+    'Encoder layers':N_ENCODER_LAYERS,
+    'Decoder layers':N_DECODER_LAYERS,
     'Horizon':HORIZON,
     'Transformer sequence length':SEQ_LEN,
     'N_HEADS':N_HEADS,

@@ -34,9 +34,9 @@ def train_model(hotstart:str = None):
     else:
         device = 'cpu'
 
-
-    if HORIZON % n_tiles:
-        print(UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON}), will lose the end of the episode"))
+    print()
+    if n_tiles % HORIZON:
+        raise UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON})")
 
 
     cfg = {
@@ -49,7 +49,8 @@ def train_model(hotstart:str = None):
     'horizon' : HORIZON,
     'seq_len' : SEQ_LEN,
     'state_dim' : bsize+2,
-    'n_layers':N_LAYERS,
+    'n_encoder_layers':N_ENCODER_LAYERS,
+    'n_decoder_layers':N_DECODER_LAYERS,
     'n_heads':N_HEADS,
     'dim_embed': DIM_EMBED,
     'hidden_size':HIDDEN_SIZE,
@@ -118,7 +119,6 @@ def train_model(hotstart:str = None):
                         torch.tensor(ep_step,device=device),
                         mask,
                         )
-            
                 selected_tile_idx = agent.get_action(policy)
                 tile_importance[selected_tile_idx.cpu()] += (n_tiles-ep_step) / 1000
                 selected_tile = remaining_tiles[selected_tile_idx]
@@ -128,43 +128,25 @@ def train_model(hotstart:str = None):
 
                 ep_reward += reward
 
-                if ep_step != 0:
 
-                    ep_buf.push(
-                        state=move_buffer.state,
-                        action=move_buffer.action,
-                        tile=move_buffer.tile,
-                        tile_mask=move_buffer.tile_mask,
-                        policy=move_buffer.policy,
-                        value=move_buffer.value,
-                        next_value=value,
-                        reward=move_buffer.reward,
-                        ep_step=ep_step,
-                        final=0
-                    )
-
+                ep_buf.push(
+                    state=state,
+                    action=selected_tile_idx,
+                    tile=selected_tile,
+                    tile_mask=mask,
+                    policy=policy,
+                    value=value,
+                    reward=reward,
+                    ep_step=ep_step,
+                    final= (ep_step == (n_tiles-1))
+                )
+            
 
                 # list_sol = to_list(new_state,bsize)
                 # pz.display_solution(list_sol,f"{step}")
                 if ep_step == n_tiles-1:
 
                     # print(pz.verify_solution(list_sol))
-                    ep_buf.push(
-                        state=state,
-                        action=selected_tile_idx,
-                        tile=selected_tile,
-                        tile_mask=mask,
-                        policy=policy,
-                        value=value,
-                        next_value=0,
-                        reward=reward,
-                        ep_step=ep_step,
-                        final=1
-                    )
-
-
-                    # Compute the advantages once the epsiode is done.
-
                     
                     curr_valid_state = new_state
 
@@ -182,24 +164,16 @@ def train_model(hotstart:str = None):
                     
 
                     
-                if (step) % HORIZON == 0 and ep_step != 0 or (step + 1)% HORIZON==0 and episode_end:
-
+                if (step-1) % HORIZON == 0 and ep_step != 1 or episode_end:
                     agent.update(
                         mem=ep_buf
                     )
+                
+                if episode_end:
                     ep_buf.reset()
 
 
-
                 
-                move_buffer.state = state 
-                move_buffer.action = selected_tile_idx
-                move_buffer.policy = policy 
-                move_buffer.tile = selected_tile
-                move_buffer.value = value 
-                move_buffer.reward = reward
-                move_buffer.tile_mask = mask.clone() #FIXME: Clone?
-
                 mask[selected_tile_idx] = False
                 state = new_state
 

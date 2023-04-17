@@ -14,7 +14,7 @@ import torch.nn.init as init
 
 class EpisodeBuffer:
     def __init__(self,ep_len:int, n_tiles:int,bsize:int, seq_len:int, horizon:int, gamma, gae_lambda, device) -> None:
-        self.ep_len = horizon
+        self.ep_len = ep_len
         self.device = device
         self.bsize = bsize
         self.horizon = horizon
@@ -32,7 +32,6 @@ class EpisodeBuffer:
             policy,
             tile_mask,
             value,
-            next_value,
             reward,
             ep_step,
             final
@@ -42,12 +41,14 @@ class EpisodeBuffer:
         self.policy_buf[self.ptr] = policy
         self.mask_buf[self.ptr] = tile_mask
         self.value_buf[self.ptr] = value
-        self.next_value_buf[self.ptr] = next_value
         self.rew_buf[self.ptr] = reward
         self.timestep_buf[self.ptr] = ep_step
         self.final_buf[self.ptr] = final
         self.act_buf[self.ptr] = action
         self.tile_buf[self.ptr + 1] = tile
+
+        if self.ptr != 0:
+            self.next_value_buf[self.ptr - 1] = value
 
         if self.ptr < self.seq_len+1:
             bot = 0
@@ -55,26 +56,33 @@ class EpisodeBuffer:
         else:
             bot = self.ptr-self.seq_len-1
             top = self.ptr
+
         self.tile_seq[self.ptr] = self.tile_buf[bot:top]
 
 
         self.ptr += 1
 
-        if self.ptr % self.horizon == 0:
+        if (self.ptr-1) % self.horizon == 0 and self.ptr != 1 or self.ptr == self.ep_len:
             self.compute_gae_rtg(self.gamma,self.gae_lambda)
 
 
     def compute_gae_rtg(self,  gamma, gae_lambda): #FIXME:MASKS?
 
         if (self.ptr) % self.horizon != 0:
-            raise BufferError("Calculating GAE at wrong time")
+            # raise BufferError("Calculating GAE at wrong time")
+            pass
         
-        if self.ptr >= self.horizon:
-            bot = self.ptr-self.horizon
-            top = self.ptr
-        
+        if self.ptr  >= self.horizon:
+            bot = self.ptr-1-self.horizon
+            top = self.ptr-1
         else:
             raise IndexError
+        
+        if self.ptr == self.ep_len:
+            bot += 1
+            top += 1
+        
+        print(bot,top)
 
         rewards = self.rew_buf[bot:top]
         values = self.value_buf[bot:top]
@@ -90,9 +98,10 @@ class EpisodeBuffer:
             gae = td_errors[t] + gamma * gae_lambda * (1 - finals[t]) * gae
             advantages[t] = gae
 
+        print(next_values)
 
         returns_to_go = torch.zeros_like(rewards)
-        return_to_go = 0
+        return_to_go = next_values[-1]
         for t in reversed(range(len(rewards))):
             return_to_go = rewards[t] + gamma * (1 - finals[t]) * return_to_go
             returns_to_go[t] = return_to_go 
@@ -121,7 +130,7 @@ class EpisodeBuffer:
 
 
     def __getitem__(self,key):
-        return getattr(self,key)[self.ptr-self.horizon:self.ptr]
+        return getattr(self,key)[self.ptr-1-self.horizon:self.ptr-1]
 
 
 

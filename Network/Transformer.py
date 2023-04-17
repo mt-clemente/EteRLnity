@@ -30,7 +30,8 @@ class PPOAgent:
         n_tiles = config['n_tiles']
         hidden_size = config['hidden_size']
         dim_embed = config['dim_embed']
-        n_layers = config['n_layers']
+        n_encoder_layers = config['n_encoder_layers']
+        n_decoder_layers = config['n_decoder_layers']
         n_heads = config['n_heads']
 
         self.action_dim = n_tiles
@@ -39,7 +40,8 @@ class PPOAgent:
             act_dim=self.action_dim,
             dim_embed=dim_embed,
             hidden_size=hidden_size,
-            n_layers=n_layers,
+            n_decoder_layers=n_decoder_layers,
+            n_encoder_layers=n_encoder_layers,
             n_heads=n_heads,
             max_length=self.seq_len,
             device=self.device,
@@ -78,14 +80,14 @@ class PPOAgent:
             training_device = 'cpu'
 
         dataset = TensorDataset(
-            mem.state_buf.to(training_device),
-            mem.act_buf.to(training_device),#BOS action is not 'taken'
-            mem.tile_seq.to(training_device),#BOS action is not 'taken'
-            mem.mask_buf.to(training_device),#BOS action is not 'taken'
-            mem.adv_buf.to(training_device),
-            mem.policy_buf.to(training_device),
-            mem.rtg_buf.to(training_device), # Returns to go for the whole episode
-            mem.timestep_buf.to(training_device),
+            mem['state_buf'].to(training_device),
+            mem['act_buf'].to(training_device),#BOS action is not 'taken'
+            mem['tile_seq'].to(training_device),#BOS action is not 'taken'
+            mem['mask_buf'].to(training_device),#BOS action is not 'taken'
+            mem['adv_buf'].to(training_device),
+            mem['policy_buf'].to(training_device),
+            mem['rtg_buf'].to(training_device), # Returns to go for the whole episode
+            mem['timestep_buf'].to(training_device),
         )
 
         if (self.horizon) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2 and self.horizon % MINIBATCH_SIZE != 0:
@@ -209,7 +211,8 @@ class DecisionTransformerAC(nn.Module):
             act_dim,
             dim_embed,
             hidden_size,
-            n_layers,
+            n_encoder_layers,
+            n_decoder_layers,
             n_heads,
             device,
             max_length,
@@ -224,8 +227,9 @@ class DecisionTransformerAC(nn.Module):
 
         self.actor_dt =  nn.Transformer(
                 d_model=4*dim_embed,
-                num_decoder_layers=N_LAYERS,
-                num_encoder_layers=N_DECODE_LAYERS,
+                num_encoder_layers=n_encoder_layers,
+                num_decoder_layers=n_decoder_layers,
+                nhead=n_heads,
                 dim_feedforward=self.hidden_size,
                 dropout=0.05,
                 activation=F.gelu,
@@ -237,9 +241,10 @@ class DecisionTransformerAC(nn.Module):
         
         self.critic_dt =  nn.Transformer(
                 d_model=4*dim_embed,
-                num_decoder_layers=N_LAYERS,
-                num_encoder_layers=N_DECODE_LAYERS,
+                num_encoder_layers=n_encoder_layers,
+                num_decoder_layers=n_decoder_layers,
                 dim_feedforward=self.hidden_size,
+                nhead=n_heads,
                 dropout=0.05,
                 activation=F.gelu,
                 batch_first=True,
@@ -329,9 +334,9 @@ class DecisionTransformerAC(nn.Module):
             tgt_key_padding_mask=key_padding_mask
         )
 
-        policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
+        policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
         policy_pred = self.policy_head(policy_logits,tile_mask)
-        value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
+        value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
 
         # policy_ouputs = policy_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
         # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
