@@ -98,8 +98,8 @@ class PPOAgent:
             drop_last = False
 
         wandb.log({
-            'Advantages repartition':mem.adv_buf.to(training_device),
-            'Returns to go repartition':mem.rtg_buf.to(training_device),
+            'Advantages repartition':mem['adv_buf'],
+            'Returns to go repartition':mem['rtg_buf'],
         })
 
         loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False, drop_last=drop_last)
