@@ -164,7 +164,7 @@ def train_model(hotstart:str = None):
                     
 
                     
-                if (step-1) % HORIZON == 0 and ep_step != 1 or episode_end:
+                if (step) % HORIZON == 0 and ep_step != 0 or episode_end:
                     agent.update(
                         mem=ep_buf
                     )

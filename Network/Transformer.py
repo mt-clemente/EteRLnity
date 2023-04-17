@@ -90,6 +90,7 @@ class PPOAgent:
             mem['timestep_buf'].to(training_device),
         )
 
+
         if (self.horizon) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2 and self.horizon % MINIBATCH_SIZE != 0:
             print("dropping last ",(self.horizon) % MINIBATCH_SIZE)
             drop_last = True

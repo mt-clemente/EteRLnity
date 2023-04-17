@@ -71,9 +71,9 @@ class EpisodeBuffer:
         if (self.ptr) % self.horizon != 0:
             # raise BufferError("Calculating GAE at wrong time")
             pass
-        
+
         if self.ptr  >= self.horizon:
-            bot = self.ptr-1-self.horizon
+            bot = self.ptr-self.horizon-1
             top = self.ptr-1
         else:
             raise IndexError
@@ -82,7 +82,6 @@ class EpisodeBuffer:
             bot += 1
             top += 1
         
-        print(bot,top)
 
         rewards = self.rew_buf[bot:top]
         values = self.value_buf[bot:top]
@@ -98,11 +97,11 @@ class EpisodeBuffer:
             gae = td_errors[t] + gamma * gae_lambda * (1 - finals[t]) * gae
             advantages[t] = gae
 
-        print(next_values)
 
         returns_to_go = torch.zeros_like(rewards)
         return_to_go = next_values[-1]
-        for t in reversed(range(len(rewards))):
+        returns_to_go[-1] = return_to_go
+        for t in reversed(range(len(rewards)-1)):
             return_to_go = rewards[t] + gamma * (1 - finals[t]) * return_to_go
             returns_to_go[t] = return_to_go 
 
