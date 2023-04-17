@@ -47,11 +47,9 @@ class PPOAgent:
         
 
         self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
-        self.scheduler = torch.optim.lr_scheduler.LinearLR(
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer=self.optimizer,
-            start_factor=0.01,
-            end_factor=1,
-            total_iters=10000,
+            T_max=1e6,
         )
 
     def get_action(self, policy:torch.Tensor):
