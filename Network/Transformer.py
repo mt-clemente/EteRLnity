@@ -53,9 +53,11 @@ class PPOAgent:
         
 
         self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        self.scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=self.optimizer,
-            T_max=1e4,
+            start_factor=0.01,
+            end_factor=1,
+            total_iters=1e5,
         )
 
         
