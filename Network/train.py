@@ -105,7 +105,6 @@ def train_model(hotstart:str = None):
         tile_seq = torch.vstack([worker.ep_buf['tile_seq'] for worker in agent.workers]).to(training_device)
         mask_buf = torch.vstack([worker.ep_buf['mask_buf'] for worker in agent.workers]).to(training_device)
         adv_buf = torch.hstack([worker.ep_buf['adv_buf'] for worker in agent.workers]).to(training_device)
-        value_buf = torch.hstack([worker.ep_buf['value_buf'] for worker in agent.workers]).to(training_device)
         rew_buf = torch.hstack([worker.ep_buf['rew_buf'] for worker in agent.workers]).to(training_device)
         policy_buf = torch.vstack([worker.ep_buf['policy_buf'] for worker in agent.workers]).to(training_device)
         rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)

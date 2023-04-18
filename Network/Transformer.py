@@ -166,6 +166,11 @@ class PPOAgent:
             "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })
 
+
+        for worker in self.workers:
+            worker.load_state_dict(self.model.state_dict())
+
+
         if not CUDA_ONLY:
             self.model = self.model.cpu()
     
