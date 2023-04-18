@@ -2,9 +2,10 @@ import os
 from einops import repeat, rearrange
 import torch
 from torch import Tensor
+from train_monoagent import get_conflicts, place_tile
 from Trajectories import *
 from math import exp
-from Transformer import PPOAgent
+from Transformer import DecisionTransformerAC, PPOAgent
 from utils import *
 from param import *
 import wandb
@@ -64,273 +65,170 @@ def train_model(hotstart:str = None):
     agent = PPOAgent(cfg)
     agent.model.train()
 
-    move_buffer = AdvantageBuffer()
-    
-    ep_buf = EpisodeBuffer(
-        ep_len=n_tiles,
-        n_tiles=n_tiles,
-        bsize=bsize+2,
-        horizon=HORIZON,
-        seq_len=SEQ_LEN,
-        gamma=GAMMA,
-        gae_lambda=GAE_LAMBDA,
-        device=device
-    )
 
-    max_entropy = torch.log2(torch.tensor(n_tiles))
-    policy_entropy = max_entropy
 
     # -------------------- TRAINING LOOP --------------------
 
     torch.cuda.empty_cache()
 
+    episode = 0
     step = 0
 
     print("start")
 
-    best_score = 0
-    tile_importance = torch.zeros(n_tiles)
-    episode = 0
-
-    try:
-        
-        while 1:
-
-            state, remaining_tiles, n_tiles = initialize_sol(args.instance,device)
-            state = state.to(dtype=UNIT)
-            mask = (torch.zeros_like(remaining_tiles[:,0]) == 0)
-            episode_end = False
-            prev_conflicts = get_conflicts(state,bsize)
-
-            # print(f"NEW EPISODE : - {episode:>5}")
-            ep_reward = 0
-            connections = 0
-            episode_best_score = 0
-            ep_start = step
-            ep_step = 0
+    while 1:
 
 
-            while not episode_end:
-                
-                with torch.no_grad():
-                    policy, value = agent.model.get_action(
-                        ep_buf.state_buf[ep_buf.ptr-1],
-                        ep_buf.tile_seq[ep_buf.ptr-1],
-                        torch.tensor(ep_step,device=device),
-                        mask,
-                        )
-                selected_tile_idx = agent.get_action(policy)
-                tile_importance[selected_tile_idx.cpu()] += (n_tiles-ep_step) / 1000
-                selected_tile = remaining_tiles[selected_tile_idx]
-                new_state, reward, connect = place_tile(state,selected_tile,ep_step)
-                connections += connect
-
-
-                ep_reward += reward
-
-
-                ep_buf.push(
+        state, tiles, n_tiles = initialize_sol(args.instance,device)
+        state = state.to(dtype=UNIT)
+    
+        for w in range(NUM_WORKERS):
+            rollout(worker=agent.workers[w],
                     state=state,
-                    action=selected_tile_idx,
-                    tile=selected_tile,
-                    tile_mask=mask,
-                    policy=policy,
-                    value=value,
-                    reward=reward,
-                    ep_step=ep_step,
-                    final= (ep_step == (n_tiles-1))
-                )
+                    tiles=tiles,
+                    n_tiles=n_tiles,
+                    step=step,
+                    horizon=HORIZON
+                    )
             
 
-                # list_sol = to_list(new_state,bsize)
-                # pz.display_solution(list_sol,f"{step}")
-                if ep_step == n_tiles-1:
 
-                    # print(pz.verify_solution(list_sol))
-                    
-                    curr_valid_state = new_state
+        
+        if torch.cuda.is_available() and not CPU_TRAINING:
+            # agent = agent.cuda() #FIXME:
+            training_device = 'cuda'
+        else:
+            training_device = 'cpu'
 
-                    if episode % 1 == 0:
-                        print(f"END EPISODE {episode} - Connections {connections}/{bsize * 2 *(bsize+1)}")
-                    episode_end = True
-                    episode += 1
+        state_buf = torch.vstack([worker.ep_buf['state_buf'] for worker in agent.workers]).to(training_device)
+        act_buf = torch.hstack([worker.ep_buf['act_buf'] for worker in agent.workers]).to(training_device)
+        tile_seq = torch.vstack([worker.ep_buf['tile_seq'] for worker in agent.workers]).to(training_device)
+        mask_buf = torch.vstack([worker.ep_buf['mask_buf'] for worker in agent.workers]).to(training_device)
+        adv_buf = torch.hstack([worker.ep_buf['adv_buf'] for worker in agent.workers]).to(training_device)
+        value_buf = torch.hstack([worker.ep_buf['value_buf'] for worker in agent.workers]).to(training_device)
+        rew_buf = torch.hstack([worker.ep_buf['rew_buf'] for worker in agent.workers]).to(training_device)
+        policy_buf = torch.vstack([worker.ep_buf['policy_buf'] for worker in agent.workers]).to(training_device)
+        rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
+        timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
 
-                    wandb.log({
-                        "Mean episode reward":ep_reward/(step - ep_start + 1e-5),
-                        'Final connections':connections,
-                        'Tile rank':(tile_importance - tile_importance.mean() )/ (tile_importance.std() + 1e-5)
-                        }
-                        )
-                    
+        wandb.log({
+            'Mean batch reward' : rew_buf.mean(),
+            'Advantage repartition': adv_buf,
+            'Return to go repartition': rtg_buf,
+        })
 
-                    
-                if (step) % HORIZON == 0 and ep_step != 0 or episode_end:
-                    agent.update(
-                        mem=ep_buf
-                    )
-                
-                if episode_end:
-                    ep_buf.reset()
+        dataset = TensorDataset(
+            state_buf,
+            act_buf,
+            tile_seq,
+            mask_buf,
+            adv_buf,
+            policy_buf,
+            rtg_buf,
+            timestep_buf,
+        )
+
+        if (HORIZON) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2 and HORIZON % MINIBATCH_SIZE != 0:
+            print("dropping last ",(HORIZON) % MINIBATCH_SIZE)
+            drop_last = True
+        else:
+            drop_last = False
 
 
-                
-                mask[selected_tile_idx] = False
-                state = new_state
+        loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=drop_last)
 
-                with torch.no_grad():
-                    policy_prob = policy[policy != 0]
-                    policy_entropy = -(policy_prob * torch.log2(policy_prob)).sum()
+        agent.update(
+            loader
+        )
 
-                if step%LOG_EVERY ==0:
-                    wandb.log(
-                        {   
-                        'Reward': reward,
-                        }
-                    )
-                if ep_step == 0:
 
-                    wandb.log(
-                        {   
-                            'Relative policy entropy': policy_entropy/max_entropy,
-                            'Value': value,
-                        }
-                    )
+        if step + HORIZON == n_tiles + 1:
+            step = 0
+            for worker in agent.workers:
+                worker.ep_buf.reset()
+            
+            print(f"END EPISODE {episode}")
+            
+        elif step == 0:
+            step = HORIZON+1
 
-                step += 1
-                ep_step += 1
+        elif step < n_tiles - 1:
+            step += HORIZON
+        else:
+            raise OSError(step)
 
                 # checkpoint the policy net
-                if step % CHECKPOINT_PERIOD == 0:
-                    inst = args.instance.replace("instances/eternity_","")
-                    inst = inst.replace(".txt","")
-                    try:
-                        torch.save(agent.model.state_dict(), f'models/checkpoint/{inst}/{step // CHECKPOINT_PERIOD}.pt')
-                    except:
-                        os.mkdir(f"models/checkpoint/{inst}/")
-                        torch.save(agent.model.state_dict(), f'models/checkpoint/{inst}/{step // CHECKPOINT_PERIOD}.pt')
+        if episode % CHECKPOINT_PERIOD == 0:
+            try:
+                torch.save(agent.model.state_dict(), f'models/checkpoint/{episode}.pt')
+            except BaseException as e:
+                os.mkdir(f"models/checkpoint/")
+                torch.save(agent.model.state_dict(), f'models/checkpoint/{episode}.pt')
 
 
-            if episode_best_score > best_score:
-                best_score = episode_best_score
+    return 
+
+
+
+def rollout(worker:DecisionTransformerAC,
+            state:Tensor,
+            tiles:Tensor,
+            n_tiles:int,
+            step:int,
+            horizon:int,
+            ):
+
+    device = state.device
+
+    try:
+
+        mask = (torch.zeros_like(tiles[:,0]) == 0)
+        horizon_end = False
+
+        # print(f"NEW EPISODE : - {episode:>5}")
+
+        while not horizon_end:
+            
+            with torch.no_grad():
+                policy, value = worker(
+                    worker.ep_buf.state_buf[worker.ep_buf.ptr-1],
+                    worker.ep_buf.tile_seq[worker.ep_buf.ptr-1],
+                    torch.tensor(step,device=device),
+                    mask,
+                )
+                
+            selected_tile_idx = worker.get_action(policy)
+            selected_tile = tiles[selected_tile_idx]
+            new_state, reward, _ = place_tile(state,selected_tile,step)
+
+            worker.ep_buf.push(
+                state=state,
+                action=selected_tile_idx,
+                tile=selected_tile,
+                tile_mask=mask,
+                policy=policy,
+                value=value,
+                reward=reward,
+                ep_step=step,
+                final= (step == (n_tiles-1))
+            )
+        
+
+            if step == n_tiles-1 or (step) % horizon == 0 and step != 0:
+                horizon_end = True
+            
+            mask[selected_tile_idx] = False
+            state = new_state
+            step += 1
+
+
 
     except KeyboardInterrupt:
         pass
 
-    # reporter = MemReporter(agent)
-    # reporter.report()
-    print("STILL VALID :",pz.verify_solution(to_list(curr_valid_state,bsize)))
-    print(best_score)
-    return 
-
-
-def place_tile(state:Tensor,tile:Tensor,step:int):
-
-    state = state.clone()
-    bsize = state.size()[0] - 2
-    best_rew = -1
-    best_connect = 0
-    for _ in range(4):
-        tile = tile.roll(COLOR_ENCODING_SIZE,-1)
-        state[step // bsize + 1, step % bsize + 1,:] = tile
-        connect,reward = filling_connections(state,bsize,step)
-        if reward > best_rew:
-            best_state=state.clone()
-            best_rew=reward
-            best_connect = connect
-
-    return best_state, best_rew, best_connect
-
-def streak(streak_length:int, n_tiles):
-    return (2 - exp(-streak_length * 3/(0.8 * n_tiles)))
 
 
 
-def filling_connections(state:Tensor, bsize:int, step):
-    i = step // bsize + 1
-    j = step % bsize + 1
-    west_tile_color = state[i,j-1,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
-    south_tile_color = state[i-1,j,:COLOR_ENCODING_SIZE]
-
-    west_border_color = state[i,j,1*COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
-    south_border_color = state[i,j,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
-
-    connections = 0
-    reward = 0
-
-    if j == 1:
-        if torch.all(west_border_color == 0):
-            reward += 2
-            connections += 1
-    
-    elif torch.all(west_border_color == west_tile_color):
-        connections += 1
-        reward += 1
-
-    if i == 1:
-        if torch.all(south_border_color == 0):
-            connections += 1
-            reward += 2
-    
-    elif torch.all(south_border_color == south_tile_color):
-        connections += 1
-        reward += 1
-   
-   
-    if j == bsize:
-
-        east_border_color = state[i,j,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
-
-        if torch.all(east_border_color == 0):
-            connections += 1
-            reward += 2
-    
-
-    if i == bsize:
-
-        north_border_color = state[i,j,:COLOR_ENCODING_SIZE]
-        if torch.all(north_border_color == 0):
-            reward += 2
-            connections += 1
-    
-
-    return connections, reward
-        
-        
-
-
-
-def get_conflicts(state:Tensor, bsize:int, step:int = 0) -> int:
-
-    offset = 1
-    mask = torch.ones(bsize**2)
-    board = state[offset:offset+bsize,offset:offset+bsize].clone()
-    
-    extended_board = state[offset-1:offset+bsize+1,offset-1:offset+bsize+1]
-
-    n_offset = extended_board[2:,1:-1,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
-    s_offset = extended_board[:-2,1:-1,:COLOR_ENCODING_SIZE]
-    w_offset = extended_board[1:-1,:-2,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
-    e_offset = extended_board[1:-1,2:,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
-
-    n_connections = board[:,:,:COLOR_ENCODING_SIZE] == n_offset
-    s_connections = board[:,:,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE] == s_offset
-    w_connections = board[:,:,COLOR_ENCODING_SIZE: 2*COLOR_ENCODING_SIZE] == w_offset
-    e_connections = board[:,:,3*COLOR_ENCODING_SIZE: 4*COLOR_ENCODING_SIZE] == e_offset
-
-
-
-    redundant_ns = torch.logical_and(n_connections[:-1,:],s_connections[1:,:])
-    redundant_we = torch.logical_and(w_connections[:,1:],e_connections[:,:-1])
-
-    redundant_connections = torch.all(redundant_we,dim=-1).sum() + torch.all(redundant_ns,dim=-1).sum()
-
-    all = (torch.all(n_connections,dim=-1).sum() + torch.all(s_connections,dim=-1).sum() + torch.all(e_connections,dim=-1).sum() + torch.all(w_connections,dim=-1).sum())
-    
-    total_connections = all - redundant_connections
-
-    max_connections = (bsize + 1) * bsize * 2
-
-    return max_connections - total_connections
 
 
 # ----------- MAIN CALL -----------
@@ -350,5 +248,3 @@ if __name__ == "__main__"  and '__file__' in globals():
     train_model()
 
     wandb.finish()
-
-

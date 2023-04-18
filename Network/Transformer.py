@@ -1,3 +1,4 @@
+import copy
 import math
 from matplotlib import pyplot as plt
 import numpy as np
@@ -35,6 +36,7 @@ class PPOAgent:
         n_heads = config['n_heads']
 
         self.action_dim = n_tiles
+
         self.model = DecisionTransformerAC(
             state_dim=self.state_dim,
             act_dim=self.action_dim,
@@ -47,19 +49,19 @@ class PPOAgent:
             device=self.device,
             )
         
+        self.workers = nn.ModuleList([copy.deepcopy(self.model) for i in range(NUM_WORKERS)])
+        
 
         self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer=self.optimizer,
-            T_max=1e6,
+            T_max=1e4,
         )
 
-    def get_action(self, policy:torch.Tensor):
-        return torch.multinomial(policy,1)
         
 
     # def update(self, states, actions, old_policies, values, advantages, returns):
-    def update(self,mem:EpisodeBuffer):
+    def update(self,loader:DataLoader):
         """
         Updates the ppo agent, using the trajectories in the memory buffer.
         For states, policy, rewards, advantages, and timesteps the data is in a 
@@ -73,36 +75,6 @@ class PPOAgent:
 
         t0 = datetime.now()
 
-        if torch.cuda.is_available() and not CPU_TRAINING:
-            self.model = self.model.cuda()
-            training_device = 'cuda'
-        else:
-            training_device = 'cpu'
-
-        dataset = TensorDataset(
-            mem['state_buf'].to(training_device),
-            mem['act_buf'].to(training_device),#BOS action is not 'taken'
-            mem['tile_seq'].to(training_device),#BOS action is not 'taken'
-            mem['mask_buf'].to(training_device),#BOS action is not 'taken'
-            mem['adv_buf'].to(training_device),
-            mem['policy_buf'].to(training_device),
-            mem['rtg_buf'].to(training_device), # Returns to go for the whole episode
-            mem['timestep_buf'].to(training_device),
-        )
-
-
-        if (self.horizon) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2 and self.horizon % MINIBATCH_SIZE != 0:
-            print("dropping last ",(self.horizon) % MINIBATCH_SIZE)
-            drop_last = True
-        else:
-            drop_last = False
-
-        wandb.log({
-            'Advantages repartition':mem['adv_buf'],
-            'Returns to go repartition':mem['rtg_buf'],
-        })
-
-        loader = DataLoader(dataset, batch_size=self.minibatch_size, shuffle=False, drop_last=drop_last)
         
 
         # Perform multiple update epochs
@@ -220,10 +192,23 @@ class DecisionTransformerAC(nn.Module):
     ):
         super().__init__()
         self.state_dim = state_dim
+        self.bsize = state_dim - 2
         self.n_tiles = (state_dim-2)**2
         self.act_dim = act_dim
         self.hidden_size = hidden_size
         self.seq_length = max_length
+
+
+        self.ep_buf = EpisodeBuffer(
+            ep_len=self.n_tiles,
+            n_tiles=self.n_tiles,
+            bsize=state_dim,
+            horizon=HORIZON,
+            seq_len=self.seq_length,
+            gamma=GAMMA,
+            gae_lambda=GAE_LAMBDA,
+            device=device
+        )
 
 
         self.actor_dt =  nn.Transformer(
@@ -312,7 +297,6 @@ class DecisionTransformerAC(nn.Module):
 
         # embed each modality with a different head
         key_padding_mask = (torch.any((actions_ == -1).squeeze(-1),-1))
-
         actions_embeddings = self.embed_actions(actions_.int() + 2).reshape(batch_size, self.seq_length + 1,self.dim_embed * 4)
         time_embeddings = self.embed_timestep(timesteps_)
         actions_embeddings = actions_embeddings + time_embeddings
@@ -351,13 +335,9 @@ class DecisionTransformerAC(nn.Module):
 
         return policy_pred, value_pred
 
-    def get_action(self, state,actions,timestep,mask):
-        # we don't care about the past rewards in this model
-
-        policy_preds, value_preds = self.forward(
-            state, actions, timestep, mask)
-        
-        return policy_preds, value_preds
+    
+    def get_action(self, policy:torch.Tensor):
+        return torch.multinomial(policy,1)
     
 class TransformerOutput(nn.Module):
 

@@ -23,11 +23,11 @@ N_COLORS = 23
 
 DIM_EMBED= 15
 HIDDEN_SIZE = 128
-N_ENCODER_LAYERS = 1
-N_DECODER_LAYERS = 1
-N_HEADS = 5
-GAE_LAMBDA = 0.92
-ENTROPY_WEIGHT = 0.01
+N_ENCODER_LAYERS = 2
+N_DECODER_LAYERS = 2
+N_HEADS = 3
+GAE_LAMBDA = 0.95
+ENTROPY_WEIGHT = 0.8
 VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
 
@@ -40,7 +40,7 @@ DEBUG = False
 CUDA_ONLY = False
 CPU_TRAINING = True
 UNIT = torch.float
-
+NUM_WORKERS = 4
 ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
@@ -53,14 +53,14 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 8
-CHECKPOINT_PERIOD = 256*200
-MINIBATCH_SIZE = 27
-HORIZON = 27# in number of steps
+CHECKPOINT_PERIOD = 200
+MINIBATCH_SIZE = 4
+HORIZON = 4# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 52
+SEQ_LEN = 16
 OPT_EPSILON = 1e-4
 LR = 1e-3
-GAMMA = 0.92
+GAMMA = 0.99
 CLIP_EPS = 0.1
 
 CONFIG = {
