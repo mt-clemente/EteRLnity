@@ -142,7 +142,7 @@ def train_model(hotstart:str = None):
         #     drop_last = False
 
 
-        loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=drop_last)
+        loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=True)
 
         agent.update(
             loader
