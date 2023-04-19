@@ -50,21 +50,23 @@ class EpisodeBuffer:
         if self.ptr != 0:
             self.next_value_buf[self.ptr - 1] = value
 
-        if self.ptr < self.seq_len+1:
+        if self.ptr + 1 < self.seq_len:
             bot = 0
-            top = self.seq_len+1
+            top = self.seq_len
         else:
-            bot = self.ptr-self.seq_len-1
-            top = self.ptr
+            bot = self.ptr+2-self.seq_len
+            top = self.ptr+2
 
-        self.tile_seq[self.ptr] = self.tile_buf[bot:top]
-
+        self.tile_seq[self.ptr+1] = self.tile_buf[bot:top]
 
         self.ptr += 1
+
 
         if (self.ptr-1) % self.horizon == 0 and self.ptr != 1 or self.ptr == self.ep_len:
             self.compute_gae_rtg(self.gamma,self.gae_lambda)
 
+            if self.rtg_buf.max() > 10000 or self.adv_buf.max() > 10000:
+                raise OSError(self.adv_buf)
 
     def compute_gae_rtg(self,  gamma, gae_lambda): #FIXME:MASKS?
 
@@ -82,11 +84,15 @@ class EpisodeBuffer:
             bot += 1
             top += 1
         
-
         rewards = self.rew_buf[bot:top]
         values = self.value_buf[bot:top]
         next_values = self.next_value_buf[bot:top]
         finals = self.final_buf[bot:top]
+
+        # print(rewards)
+        # print(values)
+        # print(next_values)
+        # print(finals)
 
         td_errors = rewards + gamma * next_values * (1 - finals) - values
         gae = 0
@@ -114,24 +120,23 @@ class EpisodeBuffer:
         self.act_buf = torch.empty((self.ep_len),dtype=int,device=self.device) - 1
         self.tile_buf = torch.zeros((self.ep_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
         self.tile_buf[0] = self.first_corner #BOS
-        self.tile_seq = torch.zeros((self.ep_len,self.seq_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
+        self.tile_seq = torch.zeros((self.ep_len+1,self.seq_len,4),dtype=int,device=self.device).to(UNIT) - 1
         self.tile_seq[:,0,:] = self.first_corner #BOS
-        self.rtg_buf = torch.empty((self.ep_len),device=self.device).to(UNIT) - 20
+        self.rtg_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
         self.policy_buf = torch.empty((self.ep_len,self.ep_len),device=self.device).to(UNIT)
         self.mask_buf = torch.empty((self.ep_len,self.ep_len),dtype=bool,device=self.device)
         self.value_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
-        self.next_value_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
+        self.next_value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
         self.rew_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
         self.final_buf = torch.empty((self.ep_len),dtype=int,device=self.device)
-        self.adv_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
+        self.adv_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT) - 6666
         self.timestep_buf = torch.empty((self.ep_len),device=self.device,dtype=int)
         self.ptr = 0
-
 
     def __getitem__(self,key):
 
         if self.ptr == self.ep_len:
-            return getattr(self,key)[self.ptr-self.horizon:self.ptr]
+            return getattr(self,key)[self.ptr-1-self.horizon:self.ptr]
         else:
             return getattr(self,key)[self.ptr-1-self.horizon:self.ptr-1]
 

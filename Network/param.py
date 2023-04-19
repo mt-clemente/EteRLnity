@@ -23,10 +23,10 @@ N_COLORS = 23
 
 DIM_EMBED= 15
 HIDDEN_SIZE = 2048
-N_ENCODER_LAYERS = 2
+N_ENCODER_LAYERS = 4
 N_DECODER_LAYERS = 2
 N_HEADS = 3
-GAE_LAMBDA = 0.95
+GAE_LAMBDA = 0.9
 ENTROPY_WEIGHT = 0.03
 VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
@@ -37,8 +37,8 @@ DEBUG = False
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = False
-CPU_TRAINING = True
+CUDA_ONLY = True
+CPU_TRAINING = False
 UNIT = torch.float
 ENCODING = 'ordinal'
 
@@ -51,16 +51,16 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 8
-NUM_WORKERS = 9
+EPOCHS = 1
+NUM_WORKERS = 6
 CHECKPOINT_PERIOD = 100
-MINIBATCH_SIZE = 33
-HORIZON = 11# in number of steps
+MINIBATCH_SIZE = 18
+HORIZON = 9# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 40
+SEQ_LEN = 97
 OPT_EPSILON = 1e-4
 LR = 1e-3
-GAMMA = 0.99
+GAMMA = 0.95
 CLIP_EPS = 0.1
 
 CONFIG = {

@@ -33,7 +33,6 @@ def train_model(hotstart:str = None):
     else:
         device = 'cpu'
 
-    print()
     # if n_tiles % HORIZON:
     #     raise UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON})")
 
@@ -79,101 +78,103 @@ def train_model(hotstart:str = None):
     masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
 
     print("start")
-    while 1:
 
-        avg_conf = 0
-        for w in range(NUM_WORKERS):
-            new_state, new_mask = rollout(worker=agent.workers[w],
-                            state=states[w],
-                            mask=masks[w],
-                            tiles=tiles,
-                            n_tiles=n_tiles,
-                            step=step,
-                            horizon=HORIZON
-                            )
-            states[w] = new_state
-            masks[w] = new_mask
-            conf = get_conflicts(new_state,bsize=agent.workers[w].bsize)
-            avg_conf += conf
+    try:
+        while 1:
 
-            if best_conf > conf:
-                best_conf = conf
-                best_sol = new_state
+            avg_conf = 0
+            for w in range(NUM_WORKERS):
+                new_state, new_mask = rollout(worker=agent.workers[w],
+                                state=states[w],
+                                mask=masks[w],
+                                tiles=tiles,
+                                n_tiles=n_tiles,
+                                step=step,
+                                horizon=HORIZON
+                                )
+                states[w] = new_state
+                masks[w] = new_mask
+                conf = get_conflicts(new_state,bsize=agent.workers[w].bsize)
+                avg_conf += conf
 
-
-        
-        if torch.cuda.is_available() and not CPU_TRAINING:
-            # agent = agent.cuda() #FIXME:
-            training_device = 'cuda'
-        else:
-            training_device = 'cpu'
-
-        state_buf = torch.vstack([worker.ep_buf['state_buf'] for worker in agent.workers]).to(training_device)
-        act_buf = torch.hstack([worker.ep_buf['act_buf'] for worker in agent.workers]).to(training_device)
-        tile_seq = torch.vstack([worker.ep_buf['tile_seq'] for worker in agent.workers]).to(training_device)
-        mask_buf = torch.vstack([worker.ep_buf['mask_buf'] for worker in agent.workers]).to(training_device)
-        adv_buf = torch.hstack([worker.ep_buf['adv_buf'] for worker in agent.workers]).to(training_device)
-        rew_buf = torch.hstack([worker.ep_buf['rew_buf'] for worker in agent.workers]).to(training_device)
-        policy_buf = torch.vstack([worker.ep_buf['policy_buf'] for worker in agent.workers]).to(training_device)
-        rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
-        timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
-
-        wandb.log({
-            'Mean batch reward' : rew_buf.mean(),
-            'Advantage repartition': adv_buf,
-            'Return to go repartition': rtg_buf,
-        })
-
-        dataset = TensorDataset(
-            state_buf,
-            act_buf,
-            tile_seq,
-            mask_buf,
-            adv_buf,
-            policy_buf,
-            rtg_buf,
-            timestep_buf,
-        )
-
-        # if MINIBATCH_SIZE%HORIZON < MINIBATCH_SIZE / 2 and HORIZON % MINIBATCH_SIZE != 0:
-        #     print("dropping last ",(HORIZON) % MINIBATCH_SIZE)
-        #     drop_last = True
-        # else:
-        #     drop_last = False
+                if best_conf > conf:
+                    best_conf = conf
+                    best_sol = new_state
 
 
-        loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=True)
-
-        agent.update(
-            loader
-        )
-
-
-        if step + HORIZON == n_tiles:
-            step = 0
-            for worker in agent.workers:
-                worker.ep_buf.reset()
             
-            states = init_state.repeat(NUM_WORKERS,1,1,1)
-            masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
-            wandb.log({'Conflicts':avg_conf/NUM_WORKERS})
+            if torch.cuda.is_available() and not CPU_TRAINING:
+                # agent = agent.cuda() #FIXME:
+                training_device = 'cuda'
+            else:
+                training_device = 'cpu'
 
-            print(f"END EPISODE {episode}")
-            episode += 1
-            
-        elif step == 0:
-            step = HORIZON+1
+            state_buf = torch.vstack([worker.ep_buf['state_buf'] for worker in agent.workers]).to(training_device)
+            act_buf = torch.hstack([worker.ep_buf['act_buf'] for worker in agent.workers]).to(training_device)
+            tile_seq = torch.vstack([worker.ep_buf['tile_seq'] for worker in agent.workers]).to(training_device)
+            mask_buf = torch.vstack([worker.ep_buf['mask_buf'] for worker in agent.workers]).to(training_device)
+            adv_buf = torch.hstack([worker.ep_buf['adv_buf'] for worker in agent.workers]).to(training_device)
+            rew_buf = torch.hstack([worker.ep_buf['rew_buf'] for worker in agent.workers]).to(training_device)
+            policy_buf = torch.vstack([worker.ep_buf['policy_buf'] for worker in agent.workers]).to(training_device)
+            rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
+            timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
 
-        elif step < n_tiles - 2:
-            step += HORIZON
-        else:
-            raise OSError(step)
+            wandb.log({
+                'Mean batch reward' : rew_buf.mean(),
+                'Advantage repartition': adv_buf,
+                'Return to go repartition': rtg_buf,
+            })
 
-                # checkpoint the policy net
-        if episode % CHECKPOINT_PERIOD == 0:
+            dataset = TensorDataset(
+                state_buf,
+                act_buf,
+                tile_seq,
+                mask_buf,
+                adv_buf,
+                policy_buf,
+                rtg_buf,
+                timestep_buf,
+            )
 
-            agent.save_models(dir,episode)
+            # if MINIBATCH_SIZE%HORIZON < MINIBATCH_SIZE / 2 and HORIZON % MINIBATCH_SIZE != 0:
+            #     print("dropping last ",(HORIZON) % MINIBATCH_SIZE)
+            #     drop_last = True
+            # else:
+            #     drop_last = False
 
+
+            loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=True)
+            agent.update(
+                loader
+            )
+
+            if step + HORIZON == n_tiles:
+                step = 0
+                for worker in agent.workers:
+                    worker.ep_buf.reset()
+                
+                states = init_state.repeat(NUM_WORKERS,1,1,1)
+                masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
+                wandb.log({'Conflicts':avg_conf/NUM_WORKERS})
+
+                print(f"END EPISODE {episode}")
+                episode += 1
+                
+            elif step == 0:
+                step = HORIZON+1
+
+            elif step < n_tiles - 2:
+                step += HORIZON
+            else:
+                raise OSError(step)
+
+                    # checkpoint the policy net
+            if episode % CHECKPOINT_PERIOD == 0:
+
+                agent.save_models(dir,episode)
+
+    except KeyboardInterrupt:
+        pass
 
     list_sol = to_list(best_sol,bsize)
     print(pz.verify_solution(list_sol))
@@ -191,49 +192,40 @@ def rollout(worker:DecisionTransformerAC,
 
     device = state.device
 
-    try:
+    horizon_end = False
 
-        horizon_end = False
-
-        # print(f"NEW EPISODE : - {episode:>5}")
-
-        while not horizon_end:
-            
-            with torch.no_grad():
-                policy, value = worker(
-                    worker.ep_buf.state_buf[worker.ep_buf.ptr-1],
-                    worker.ep_buf.tile_seq[worker.ep_buf.ptr-1],
-                    torch.tensor(step,device=device),
-                    mask,
-                )
-                
-            selected_tile_idx = worker.get_action(policy)
-            selected_tile = tiles[selected_tile_idx]
-            new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
-
-            worker.ep_buf.push(
-                state=state,
-                action=selected_tile_idx,
-                tile=selected_tile,
-                tile_mask=mask,
-                policy=policy,
-                value=value,
-                reward=reward,
-                ep_step=step,
-                final= (step == (n_tiles-1))
-            )
+    while not horizon_end:
         
-            if step == n_tiles-2 or (step) % horizon == 0 and step != 0:
-                horizon_end = True
+        with torch.no_grad():
+            policy, value = worker(
+                worker.ep_buf.state_buf[worker.ep_buf.ptr-1],
+                worker.ep_buf.tile_seq[worker.ep_buf.ptr-1],
+                torch.tensor(step,device=device),
+                mask,
+            )
             
-            mask[selected_tile_idx] = False
-            state = new_state
-            step += 1
+        selected_tile_idx = worker.get_action(policy)
+        selected_tile = tiles[selected_tile_idx]
+        new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
 
-
-
-    except KeyboardInterrupt:
-        pass
+        worker.ep_buf.push(
+            state=state,
+            action=selected_tile_idx,
+            tile=selected_tile,
+            tile_mask=mask,
+            policy=policy,
+            value=value,
+            reward=reward,
+            ep_step=step,
+            final= (step == (n_tiles-1))
+        )
+    
+        if step == n_tiles-2 or (step) % horizon == 0 and step != 0:
+            horizon_end = True
+        
+        mask[selected_tile_idx] = False
+        state = new_state
+        step += 1
 
     return new_state,mask
 

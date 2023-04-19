@@ -386,7 +386,7 @@ class DecisionTransformerAC(nn.Module):
 
         # embed each modality with a different head
         key_padding_mask = (torch.any((actions_ == -1).squeeze(-1),-1))
-        actions_embeddings = self.embed_actions(actions_.int() + 2).reshape(batch_size, self.seq_length + 1,self.dim_embed * 4)
+        actions_embeddings = self.embed_actions(actions_.int() + 2).reshape(batch_size, self.seq_length,self.dim_embed * 4)
         time_embeddings = self.embed_timestep(timesteps_)
         actions_embeddings = actions_embeddings + time_embeddings
         state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
