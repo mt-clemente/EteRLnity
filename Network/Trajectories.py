@@ -13,13 +13,13 @@ import torch.nn.init as init
 
 
 class EpisodeBuffer:
-    def __init__(self,ep_len:int, n_tiles:int,bsize:int, seq_len:int, horizon:int, gamma, gae_lambda, device) -> None:
+    def __init__(self,ep_len:int, bsize:int, seq_len:int, horizon:int, gamma, gae_lambda, first_corner, device) -> None:
         self.ep_len = ep_len
         self.device = device
         self.bsize = bsize
         self.horizon = horizon
         self.seq_len = seq_len
-        self.n_tiles = n_tiles
+        self.first_corner = first_corner
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.reset()
@@ -111,25 +111,29 @@ class EpisodeBuffer:
 
     def reset(self):
         self.state_buf = torch.zeros((self.ep_len,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
-        self.act_buf = torch.zeros((self.ep_len),dtype=int,device=self.device) - 1
+        self.act_buf = torch.empty((self.ep_len),dtype=int,device=self.device) - 1
         self.tile_buf = torch.zeros((self.ep_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
-        self.tile_buf[0,:] = -2 #BOS
+        self.tile_buf[0] = self.first_corner #BOS
         self.tile_seq = torch.zeros((self.ep_len,self.seq_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
-        self.tile_seq[:,0,:] = -2 #BOS
-        self.rtg_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT) - 20
-        self.policy_buf = torch.zeros((self.ep_len,self.n_tiles),device=self.device).to(UNIT)
-        self.mask_buf = torch.zeros((self.ep_len,self.n_tiles),dtype=bool,device=self.device)
-        self.value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
-        self.next_value_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
-        self.rew_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
-        self.final_buf = torch.zeros((self.ep_len),dtype=int,device=self.device)
-        self.adv_buf = torch.zeros((self.ep_len),device=self.device).to(UNIT)
-        self.timestep_buf = torch.zeros((self.ep_len),device=self.device,dtype=int)
+        self.tile_seq[:,0,:] = self.first_corner #BOS
+        self.rtg_buf = torch.empty((self.ep_len),device=self.device).to(UNIT) - 20
+        self.policy_buf = torch.empty((self.ep_len,self.ep_len),device=self.device).to(UNIT)
+        self.mask_buf = torch.empty((self.ep_len,self.ep_len),dtype=bool,device=self.device)
+        self.value_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
+        self.next_value_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
+        self.rew_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
+        self.final_buf = torch.empty((self.ep_len),dtype=int,device=self.device)
+        self.adv_buf = torch.empty((self.ep_len),device=self.device).to(UNIT)
+        self.timestep_buf = torch.empty((self.ep_len),device=self.device,dtype=int)
         self.ptr = 0
 
 
     def __getitem__(self,key):
-        return getattr(self,key)[self.ptr-1-self.horizon:self.ptr-1]
+
+        if self.ptr == self.ep_len:
+            return getattr(self,key)[self.ptr-self.horizon:self.ptr]
+        else:
+            return getattr(self,key)[self.ptr-1-self.horizon:self.ptr-1]
 
 
 

@@ -1,6 +1,7 @@
+import copy
 import torch
 from torch import Tensor
-from train_monoagent import get_conflicts, place_tile
+from train_monoagent import get_conflicts
 from Trajectories import *
 from Transformer import DecisionTransformerAC, PPOAgent
 from utils import *
@@ -33,9 +34,10 @@ def train_model(hotstart:str = None):
         device = 'cpu'
 
     print()
-    if n_tiles % HORIZON:
-        raise UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON})")
+    # if n_tiles % HORIZON:
+    #     raise UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON})")
 
+    init_state, tiles, first_corner,n_tiles = initialize_sol(args.instance,device)
 
     cfg = {
     'n_tiles' : n_tiles ,
@@ -55,7 +57,8 @@ def train_model(hotstart:str = None):
     'entropy_weight':ENTROPY_WEIGHT,
     'value_weight':VALUE_WEIGHT,
     'gae_lambda':GAE_LAMBDA,
-    'device' : device 
+    'device' : device,
+    'first_corner':first_corner
     }
 
 
@@ -72,26 +75,27 @@ def train_model(hotstart:str = None):
     step = 0
     best_conf = 1000
     best_sol = None
-    state, tiles, n_tiles = initialize_sol(args.instance,device)
-    states = [state.clone() for _ in agent.workers]
-    print("start")
+    states = init_state.repeat(NUM_WORKERS,1,1,1)
+    masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
 
+    print("start")
     while 1:
 
-
-        state = state.to(dtype=UNIT)
+        avg_conf = 0
         for w in range(NUM_WORKERS):
-            new_state = rollout(worker=agent.workers[w],
+            new_state, new_mask = rollout(worker=agent.workers[w],
                             state=states[w],
+                            mask=masks[w],
                             tiles=tiles,
                             n_tiles=n_tiles,
                             step=step,
                             horizon=HORIZON
                             )
             states[w] = new_state
+            masks[w] = new_mask
             conf = get_conflicts(new_state,bsize=agent.workers[w].bsize)
-            print(conf)
-            pz.display_solution(to_list(new_state,bsize),f"{step}_{w}")
+            avg_conf += conf
+
             if best_conf > conf:
                 best_conf = conf
                 best_sol = new_state
@@ -131,11 +135,11 @@ def train_model(hotstart:str = None):
             timestep_buf,
         )
 
-        if (HORIZON) % MINIBATCH_SIZE < MINIBATCH_SIZE / 2 and HORIZON % MINIBATCH_SIZE != 0:
-            print("dropping last ",(HORIZON) % MINIBATCH_SIZE)
-            drop_last = True
-        else:
-            drop_last = False
+        # if MINIBATCH_SIZE%HORIZON < MINIBATCH_SIZE / 2 and HORIZON % MINIBATCH_SIZE != 0:
+        #     print("dropping last ",(HORIZON) % MINIBATCH_SIZE)
+        #     drop_last = True
+        # else:
+        #     drop_last = False
 
 
         loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=drop_last)
@@ -145,21 +149,22 @@ def train_model(hotstart:str = None):
         )
 
 
-        if step + HORIZON == n_tiles + 1:
+        if step + HORIZON == n_tiles:
             step = 0
             for worker in agent.workers:
                 worker.ep_buf.reset()
             
-            states = [state.clone() for _ in agent.workers]
-            wandb.log({'Conflicts':best_conf})
-            
+            states = init_state.repeat(NUM_WORKERS,1,1,1)
+            masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
+            wandb.log({'Conflicts':avg_conf/NUM_WORKERS})
+
             print(f"END EPISODE {episode}")
             episode += 1
             
         elif step == 0:
             step = HORIZON+1
 
-        elif step < n_tiles - 1:
+        elif step < n_tiles - 2:
             step += HORIZON
         else:
             raise OSError(step)
@@ -177,6 +182,7 @@ def train_model(hotstart:str = None):
 
 def rollout(worker:DecisionTransformerAC,
             state:Tensor,
+            mask:Tensor,
             tiles:Tensor,
             n_tiles:int,
             step:int,
@@ -187,7 +193,6 @@ def rollout(worker:DecisionTransformerAC,
 
     try:
 
-        mask = (torch.zeros_like(tiles[:,0]) == 0)
         horizon_end = False
 
         # print(f"NEW EPISODE : - {episode:>5}")
@@ -204,7 +209,7 @@ def rollout(worker:DecisionTransformerAC,
                 
             selected_tile_idx = worker.get_action(policy)
             selected_tile = tiles[selected_tile_idx]
-            new_state, reward, _ = place_tile(state,selected_tile,step)
+            new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
 
             worker.ep_buf.push(
                 state=state,
@@ -218,8 +223,7 @@ def rollout(worker:DecisionTransformerAC,
                 final= (step == (n_tiles-1))
             )
         
-
-            if step == n_tiles-1 or (step) % horizon == 0 and step != 0:
+            if step == n_tiles-2 or (step) % horizon == 0 and step != 0:
                 horizon_end = True
             
             mask[selected_tile_idx] = False
@@ -231,7 +235,7 @@ def rollout(worker:DecisionTransformerAC,
     except KeyboardInterrupt:
         pass
 
-    return new_state
+    return new_state,mask
 
 
 # ----------- MAIN CALL -----------

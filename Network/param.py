@@ -37,8 +37,8 @@ DEBUG = False
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = True
-CPU_TRAINING = False
+CUDA_ONLY = False
+CPU_TRAINING = True
 UNIT = torch.float
 ENCODING = 'ordinal'
 
@@ -52,12 +52,12 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 8
-NUM_WORKERS = 6
+NUM_WORKERS = 9
 CHECKPOINT_PERIOD = 100
-MINIBATCH_SIZE = 4
-HORIZON = 4# in number of steps
+MINIBATCH_SIZE = 33
+HORIZON = 11# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 4
+SEQ_LEN = 40
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 0.99

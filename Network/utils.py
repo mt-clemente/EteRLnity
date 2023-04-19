@@ -1,4 +1,5 @@
 import argparse
+from math import exp
 import os
 import random
 import sys
@@ -26,7 +27,17 @@ def initialize_sol(instance_file:str, device):
     pz = EternityPuzzle(instance_file)
     n_tiles = len(pz.piece_list)
     tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device)
-    return torch.zeros((pz.board_size+2,pz.board_size+2,4*COLOR_ENCODING_SIZE),device=device), tiles, n_tiles
+
+    # Play the first corner to remove symetries
+    first_corner_idx = torch.argmax((tiles == 0).count_nonzero(dim=1))
+    first_corner = tiles[first_corner_idx]
+
+    state = torch.zeros((pz.board_size+2,pz.board_size+2,4*COLOR_ENCODING_SIZE),device=device)
+    state, _, _ = place_tile(state,first_corner,0)
+
+    tiles = tiles[torch.arange(tiles.size()[0],device=tiles.device) != first_corner_idx]
+
+    return state, tiles, first_corner, n_tiles
 
 
 
@@ -247,6 +258,85 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
 
 
 
+
+# ------------- PLAY UTILS -------------
+
+
+def place_tile(state:Tensor,tile:Tensor,ep_step:int,step_offset:int=0):
+    """
+    If you start with a prefilled board with k pieces, you need to place tiles at spot
+    k + 1, hence the need for a step offset when the first corner is locked in
+    """
+    step = ep_step + step_offset
+    state = state.clone()
+    bsize = state.size()[0] - 2
+    best_rew = -1
+    best_connect = 0
+    for _ in range(4):
+        tile = tile.roll(COLOR_ENCODING_SIZE,-1)
+        state[step // bsize + 1, step % bsize + 1,:] = tile
+        connect,reward = filling_connections(state,bsize,step)
+        if reward > best_rew:
+            best_state=state.clone()
+            best_rew=reward
+            best_connect = connect
+
+    return best_state, best_rew, best_connect
+
+def streak(streak_length:int, n_tiles):
+    return (2 - exp(-streak_length * 3/(0.8 * n_tiles)))
+
+
+
+def filling_connections(state:Tensor, bsize:int, step):
+    i = step // bsize + 1
+    j = step % bsize + 1
+    west_tile_color = state[i,j-1,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
+    south_tile_color = state[i-1,j,:COLOR_ENCODING_SIZE]
+
+    west_border_color = state[i,j,1*COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
+    south_border_color = state[i,j,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
+
+    connections = 0
+    reward = 0
+
+    if j == 1:
+        if torch.all(west_border_color == 0):
+            reward += 2
+            connections += 1
+    
+    elif torch.all(west_border_color == west_tile_color):
+        connections += 1
+        reward += 1
+
+    if i == 1:
+        if torch.all(south_border_color == 0):
+            connections += 1
+            reward += 2
+    
+    elif torch.all(south_border_color == south_tile_color):
+        connections += 1
+        reward += 1
+   
+   
+    if j == bsize:
+
+        east_border_color = state[i,j,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
+
+        if torch.all(east_border_color == 0):
+            connections += 1
+            reward += 2
+    
+
+    if i == bsize:
+
+        north_border_color = state[i,j,:COLOR_ENCODING_SIZE]
+        if torch.all(north_border_color == 0):
+            reward += 2
+            connections += 1
+    
+
+    return connections, reward
 
 
 

@@ -36,8 +36,9 @@ class PPOAgent:
         n_encoder_layers = config['n_encoder_layers']
         n_decoder_layers = config['n_decoder_layers']
         n_heads = config['n_heads']
+        first_corner = config['first_corner']
 
-        self.action_dim = n_tiles
+        self.action_dim = n_tiles - 1
 
         self.model = DecisionTransformerAC(
             state_dim=self.state_dim,
@@ -48,6 +49,7 @@ class PPOAgent:
             n_encoder_layers=n_encoder_layers,
             n_heads=n_heads,
             max_length=self.seq_len,
+            first_corner=first_corner,
             device=self.device,
             )
         
@@ -274,26 +276,26 @@ class DecisionTransformerAC(nn.Module):
             n_encoder_layers,
             n_decoder_layers,
             n_heads,
+            first_corner,
             device,
             max_length,
     ):
         super().__init__()
         self.state_dim = state_dim
         self.bsize = state_dim - 2
-        self.n_tiles = (state_dim-2)**2
         self.act_dim = act_dim
         self.hidden_size = hidden_size
         self.seq_length = max_length
 
 
         self.ep_buf = EpisodeBuffer(
-            ep_len=self.n_tiles,
-            n_tiles=self.n_tiles,
+            ep_len=self.act_dim,
             bsize=state_dim,
             horizon=HORIZON,
             seq_len=self.seq_length,
             gamma=GAMMA,
             gae_lambda=GAE_LAMBDA,
+            first_corner=first_corner,
             device=device
         )
 
@@ -357,7 +359,7 @@ class DecisionTransformerAC(nn.Module):
         wandb.watch(self.critic_head,log='all',log_freq=500)
             
         self.dim_embed = dim_embed 
-        self.embed_timestep = nn.Embedding(self.n_tiles, 4*dim_embed,device=device,dtype=UNIT)
+        self.embed_timestep = nn.Embedding(self.act_dim, 4*dim_embed,device=device,dtype=UNIT)
         self.embed_actions = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
         self.embed_state = nn.Embedding(N_COLORS,dim_embed,device=device,dtype=UNIT)
         self.positional_encoding = PE3D(dim_embed)
@@ -389,7 +391,7 @@ class DecisionTransformerAC(nn.Module):
         actions_embeddings = actions_embeddings + time_embeddings
         state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
         state_embeddings += self.positional_encoding(state_embeddings)
-        state_embeddings = state_embeddings.view(-1,self.n_tiles,self.dim_embed * 4)
+        state_embeddings = state_embeddings.view(-1,self.bsize**2,self.dim_embed * 4)
 
         tgt_inputs = self.embed_ln(actions_embeddings)
 
