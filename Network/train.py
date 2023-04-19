@@ -1,10 +1,7 @@
-import os
-from einops import repeat, rearrange
 import torch
 from torch import Tensor
 from train_monoagent import get_conflicts, place_tile
 from Trajectories import *
-from math import exp
 from Transformer import DecisionTransformerAC, PPOAgent
 from utils import *
 from param import *
@@ -70,27 +67,34 @@ def train_model(hotstart:str = None):
     # -------------------- TRAINING LOOP --------------------
 
     torch.cuda.empty_cache()
-
+    dir = f'models/checkpoint/{datetime.now().strftime("%d%M_%h_%m")}'
     episode = 0
     step = 0
-
+    best_conf = 1000
+    best_sol = None
+    state, tiles, n_tiles = initialize_sol(args.instance,device)
+    states = [state.clone() for _ in agent.workers]
     print("start")
 
     while 1:
 
 
-        state, tiles, n_tiles = initialize_sol(args.instance,device)
         state = state.to(dtype=UNIT)
-    
         for w in range(NUM_WORKERS):
-            rollout(worker=agent.workers[w],
-                    state=state,
-                    tiles=tiles,
-                    n_tiles=n_tiles,
-                    step=step,
-                    horizon=HORIZON
-                    )
-            
+            new_state = rollout(worker=agent.workers[w],
+                            state=states[w],
+                            tiles=tiles,
+                            n_tiles=n_tiles,
+                            step=step,
+                            horizon=HORIZON
+                            )
+            states[w] = new_state
+            conf = get_conflicts(new_state,bsize=agent.workers[w].bsize)
+            print(conf)
+            pz.display_solution(to_list(new_state,bsize),f"{step}_{w}")
+            if best_conf > conf:
+                best_conf = conf
+                best_sol = new_state
 
 
         
@@ -146,7 +150,11 @@ def train_model(hotstart:str = None):
             for worker in agent.workers:
                 worker.ep_buf.reset()
             
+            states = [state.clone() for _ in agent.workers]
+            wandb.log({'Conflicts':best_conf})
+            
             print(f"END EPISODE {episode}")
+            episode += 1
             
         elif step == 0:
             step = HORIZON+1
@@ -158,15 +166,13 @@ def train_model(hotstart:str = None):
 
                 # checkpoint the policy net
         if episode % CHECKPOINT_PERIOD == 0:
-            try:
-                torch.save(agent.model.state_dict(), f'models/checkpoint/{episode}.pt')
-            except BaseException as e:
-                os.mkdir(f"models/checkpoint/")
-                torch.save(agent.model.state_dict(), f'models/checkpoint/{episode}.pt')
+
+            agent.save_models(dir,episode)
 
 
-    return 
-
+    list_sol = to_list(best_sol,bsize)
+    print(pz.verify_solution(list_sol))
+    pz.print_solution(list_sol)
 
 
 def rollout(worker:DecisionTransformerAC,
@@ -225,9 +231,7 @@ def rollout(worker:DecisionTransformerAC,
     except KeyboardInterrupt:
         pass
 
-
-
-
+    return new_state
 
 
 # ----------- MAIN CALL -----------

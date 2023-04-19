@@ -1,4 +1,5 @@
 import argparse
+import os
 import random
 import sys
 import torch
@@ -243,3 +244,10 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
                 list_sol.append(tuple(temp))
 
     return list_sol
+
+
+
+
+
+
+

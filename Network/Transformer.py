@@ -1,5 +1,7 @@
 import copy
 import math
+import os
+from pathlib import Path
 from matplotlib import pyplot as plt
 import numpy as np
 import torch
@@ -176,6 +178,84 @@ class PPOAgent:
         if not CUDA_ONLY:
             self.model = self.model.cpu()
     
+    def save_models(self,dir:str,episode:int):
+
+        Path(dir).mkdir(parents=True, exist_ok=True)
+        Path(f"{dir}/transformers").mkdir(parents=True, exist_ok=True)
+        Path(f"{dir}/heads").mkdir(parents=True, exist_ok=True)
+        Path(f"{dir}/embeds").mkdir(parents=True, exist_ok=True)
+
+        torch.save(self.model.actor_dt.state_dict(), f'{dir}/transformers/actor_{episode}.pt')
+        torch.save(self.model.critic_dt.state_dict(), f'{dir}/transformers/critic_{episode}.pt')
+
+        torch.save(self.model.actor_head.state_dict(), f'{dir}/heads/actor_{episode}.pt')
+        torch.save(self.model.critic_head.state_dict(), f'{dir}/heads/critic_{episode}.pt')
+
+
+        torch.save(self.model.embed_actions.state_dict(), f'{dir}/embeds/action_{episode}.pt')
+        torch.save(self.model.embed_state.state_dict(), f'{dir}/embeds/state_{episode}.pt')
+        torch.save(self.model.embed_timestep.state_dict(), f'{dir}/embeds/time_{episode}.pt')
+
+
+    def load_model(self,load_dict:dict):
+        """
+        Loads a model depending on the given loading dictionary:
+
+        Keys
+        -----------------
+        * actor_dt : the actor transformer
+        * critic_dt : the critic transformer
+        * actor_head : the actor head
+        * critic_head : the critic head
+        * embed_action : action color embedding
+        * embed_state : state color embedding
+        * embed_time : timestep embedding
+        """
+
+        main_dir = 'models/checkpoint'
+
+        corresp_dict : dict[nn.Module] = {
+            'actor_dt': {
+                'model':self.model.actor_dt,
+                'dir':f'{main_dir}/transformers'
+                },
+            'critic_dt': {
+                'model':self.model.critic_dt,
+                'dir':f'{main_dir}/transformers'
+                },
+            'actor_head': {
+                'model':self.model.actor_head,
+                'dir':f'{main_dir}/heads'
+                },
+            'critic_head': {
+                'model':self.model.critic_head,
+                'dir':f'{main_dir}/heads'
+                },
+            'embed_action': {
+                'model':self.model.embed_actions,
+                'dir':f'{main_dir}/embeds'
+                },
+            'embed_state': {
+                'model':self.model.embed_state,
+                'dir':f'{main_dir}/embeds'
+                },
+            'embed_time': {
+                'model':self.model.embed_timestep,
+                'dir':f'{main_dir}/embeds'
+                },
+        }
+
+
+        for key in load_dict.keys:
+            state_dict = torch.load(f"{corresp_dict[key]['dir']/{key}}.pt")
+            model = corresp_dict[key]['model']
+            model.load_state_dict(state_dict)
+
+
+
+
+
+
 
 # -------------------- ACTOR / CRITIC --------------------
     

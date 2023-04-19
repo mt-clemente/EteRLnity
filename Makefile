@@ -27,9 +27,9 @@ game:
 	python3 main.py --agent=advanced --infile=instances/eternity_complet.txt
 
 clean:
-	rm -rf models/checkpoint/binary/*.pt
-	rm -rf models/checkpoint/ordinal/*.pt
-	rm -rf models/checkpoint/one_hot/*.pt
+	rm -rf models/checkpoint/*
+	rm -rf models/checkpoint/*
+	rm -rf models/checkpoint/*
 
 
 profile:
