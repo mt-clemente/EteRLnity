@@ -281,7 +281,7 @@ def place_tile(state:Tensor,tile:Tensor,ep_step:int,step_offset:int=0):
             best_rew=reward
             best_connect = connect
 
-    return best_state, best_rew, best_connect
+    return best_state, best_rew - 1.5, best_connect
 
 def streak(streak_length:int, n_tiles):
     return (2 - exp(-streak_length * 3/(0.8 * n_tiles)))
