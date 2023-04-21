@@ -160,9 +160,6 @@ def train_model(hotstart:str = None):
                 loader
             )
 
-            print("STEPSTESP")
-            print(step + HORIZON)
-            print(n_tiles)
             if step +  HORIZON >= n_tiles or HORIZON > n_tiles / 2:
                 step = 0
                 for worker in agent.workers:
