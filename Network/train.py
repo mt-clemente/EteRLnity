@@ -125,6 +125,18 @@ def train_model(hotstart:str = None):
                 'Return to go repartition': rtg_buf,
             })
 
+
+            print(state_buf.size())
+            print(act_buf.size())
+            print(tile_seq.size())
+            print(mask_buf.size())
+            print(adv_buf.size())
+            print(rew_buf.size())
+            print(policy_buf.size())
+            print(rtg_buf.size())
+            print(timestep_buf.size())
+
+
             dataset = TensorDataset(
                 state_buf,
                 act_buf,
@@ -148,7 +160,10 @@ def train_model(hotstart:str = None):
                 loader
             )
 
-            if step + HORIZON == n_tiles:
+            print("STEPSTESP")
+            print(step + HORIZON)
+            print(n_tiles)
+            if step +  HORIZON >= n_tiles or HORIZON > n_tiles / 2:
                 step = 0
                 for worker in agent.workers:
                     worker.ep_buf.reset()
