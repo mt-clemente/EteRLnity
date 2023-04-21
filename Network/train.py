@@ -214,7 +214,6 @@ def rollout(worker:DecisionTransformerAC,
         else :
             reward = 0
 
-        print(reward)
         worker.ep_buf.push(
             state=state,
             action=selected_tile_idx,
