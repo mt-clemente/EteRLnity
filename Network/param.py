@@ -54,10 +54,10 @@ else:
 EPOCHS = 1
 NUM_WORKERS = 6
 CHECKPOINT_PERIOD = 100
-MINIBATCH_SIZE = 18
+MINIBATCH_SIZE = 9
 HORIZON = 9# in number of steps
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 97
+SEQ_LEN = 99
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 0.95

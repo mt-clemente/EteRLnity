@@ -298,10 +298,16 @@ def filling_connections(state:Tensor, bsize:int, step):
         
         
 
-
-
 def get_conflicts(state:Tensor, bsize:int, step:int = 0) -> int:
 
+    connections = get_connections(state,bsize,step)
+    max_connections = (bsize + 1) * bsize * 2
+
+    return max_connections - connections
+
+
+
+def get_connections(state:Tensor, bsize:int, step:int = 0) -> int:
     offset = 1
     mask = torch.ones(bsize**2)
     board = state[offset:offset+bsize,offset:offset+bsize].clone()
@@ -329,9 +335,8 @@ def get_conflicts(state:Tensor, bsize:int, step:int = 0) -> int:
     
     total_connections = all - redundant_connections
 
-    max_connections = (bsize + 1) * bsize * 2
 
-    return max_connections - total_connections
+    return total_connections
 
 
 # ----------- MAIN CALL -----------
