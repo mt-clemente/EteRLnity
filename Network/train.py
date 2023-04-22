@@ -121,7 +121,6 @@ def train_model(hotstart:str = None):
             rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
             timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
 
-            print-(state_buf.min())
 
             wandb.log({
                 'Mean batch reward' : rew_buf.mean(),

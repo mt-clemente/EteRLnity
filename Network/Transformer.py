@@ -288,6 +288,7 @@ class DecisionTransformerAC(nn.Module):
     ):
         super().__init__()
         self.tiles = tiles
+        self.rolled_tiles = tiles.roll(1,-1)
         self.state_dim = state_dim
         self.bsize = state_dim - 2
         self.act_dim = act_dim
@@ -455,12 +456,13 @@ class DecisionTransformerAC(nn.Module):
         #WEST COLORS
         colors[1] = states[torch.arange(states.size()[0]),i,j-1,3]
 
-        south = (colors[0].unsqueeze(-1).unsqueeze(-1) == self.tiles.expand(colors.size()[1],-1,-1)).any(dim=-1)
-        west = (colors[1].unsqueeze(-1).unsqueeze(-1) == self.tiles.expand(colors.size()[1],-1,-1)).any(dim=-1)
+        south = (colors[0].unsqueeze(-1).unsqueeze(-1) == self.tiles.expand(colors.size()[1],-1,-1))
+        west = (colors[1].unsqueeze(-1).unsqueeze(-1) == self.rolled_tiles.expand(colors.size()[1],-1,-1))
+
+        consecutive_presence = (south & west).any(dim=-1)
 
 
-        new_mask = torch.logical_and(mask,south)
-        new_mask = torch.logical_and(new_mask,west)
+        new_mask = torch.logical_and(mask,consecutive_presence)
 
         if states.size()[0] == 1:
             mask = mask.unsqueeze(0)
