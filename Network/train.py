@@ -216,7 +216,6 @@ def rollout(worker:DecisionTransformerAC,
         if step == n_tiles - 2:
              reward = get_connections(new_state,bsize,step) * 0.5
             
-        print(step,reward)
 
         worker.ep_buf.push(
             state=state,
