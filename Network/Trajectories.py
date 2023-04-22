@@ -13,13 +13,14 @@ import torch.nn.init as init
 
 
 class EpisodeBuffer:
-    def __init__(self,ep_len:int, bsize:int, seq_len:int, horizon:int, gamma, gae_lambda, first_corner, device) -> None:
+    def __init__(self,ep_len:int, bsize:int, seq_len:int, horizon:int, gamma, gae_lambda, first_corner, init_state, device) -> None:
         self.ep_len = ep_len
         self.device = device
         self.bsize = bsize
         self.horizon = horizon
         self.seq_len = seq_len
         self.first_corner = first_corner
+        self.init_state = init_state
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.reset()
@@ -37,7 +38,7 @@ class EpisodeBuffer:
             final
             ):
 
-        self.state_buf[self.ptr] = state
+        self.state_buf[self.ptr+1] = state
         self.policy_buf[self.ptr] = policy
         self.mask_buf[self.ptr] = tile_mask
         self.value_buf[self.ptr] = value
@@ -116,7 +117,8 @@ class EpisodeBuffer:
 
 
     def reset(self):
-        self.state_buf = torch.zeros((self.ep_len,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT)
+        self.state_buf = torch.zeros((self.ep_len+1,self.bsize,self.bsize,4*COLOR_ENCODING_SIZE),device=self.device).to(UNIT) -20
+        self.state_buf[0] = self.init_state
         self.act_buf = torch.empty((self.ep_len),dtype=int,device=self.device) - 1
         self.tile_buf = torch.zeros((self.ep_len+1,4),dtype=int,device=self.device).to(UNIT) - 1
         self.tile_buf[0] = self.first_corner #BOS

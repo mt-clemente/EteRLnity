@@ -61,7 +61,7 @@ def train_model(hotstart:str = None):
     }
 
 
-    agent = PPOAgent(cfg)
+    agent = PPOAgent(cfg,tiles,init_state)
     agent.model.train()
 
 
@@ -102,6 +102,7 @@ def train_model(hotstart:str = None):
                     best_sol = new_state
 
 
+            avg_conf = avg_conf / NUM_WORKERS
             
             if torch.cuda.is_available() and not CPU_TRAINING:
                 # agent = agent.cuda() #FIXME:
@@ -118,6 +119,8 @@ def train_model(hotstart:str = None):
             policy_buf = torch.vstack([worker.ep_buf['policy_buf'] for worker in agent.workers]).to(training_device)
             rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
             timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
+
+            print(state_buf.min())
 
             wandb.log({
                 'Mean batch reward' : rew_buf.mean(),
@@ -154,12 +157,13 @@ def train_model(hotstart:str = None):
                 step = 0
                 for worker in agent.workers:
                     worker.ep_buf.reset()
-                
+
+                print(f"END EPISODE {episode} - {avg_conf}")
+
                 states = init_state.repeat(NUM_WORKERS,1,1,1)
                 masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
-                wandb.log({'Conflicts':avg_conf/NUM_WORKERS})
+                wandb.log({'Conflicts':avg_conf})
 
-                print(f"END EPISODE {episode}")
                 episode += 1
                 
             elif step == 0:
@@ -198,10 +202,10 @@ def rollout(worker:DecisionTransformerAC,
     horizon_end = False
 
     while not horizon_end:
-        
+
         with torch.no_grad():
             policy, value = worker(
-                worker.ep_buf.state_buf[worker.ep_buf.ptr-1],
+                state,
                 worker.ep_buf.tile_seq[worker.ep_buf.ptr-1],
                 torch.tensor(step,device=device),
                 mask,
@@ -209,12 +213,12 @@ def rollout(worker:DecisionTransformerAC,
             
         selected_tile_idx = worker.get_action(policy)
         selected_tile = tiles[selected_tile_idx]
-        new_state, _, _ = place_tile(state,selected_tile,step,step_offset=1)
+        new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
 
-        if step == n_tiles - 2:
-            reward = get_connections(new_state,bsize,step) / n_tiles
-        else :
-            reward = 0
+        # if step == n_tiles - 2:
+        #     reward = get_connections(new_state,bsize,step) / n_tiles
+        # else :
+        #     reward = 0
 
         worker.ep_buf.push(
             state=state,

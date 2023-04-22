@@ -17,7 +17,9 @@ from Trajectories import EpisodeBuffer
 from torch.utils.data import TensorDataset,DataLoader
 # -------------------- AGENT --------------------
 class PPOAgent:
-    def __init__(self,config):
+    def __init__(self,config,tiles,init_state):
+        self.tiles = tiles
+
         self.gamma = config['gamma']
         self.clip_eps = config['clip_eps']
         self.lr = config['lr']
@@ -50,6 +52,8 @@ class PPOAgent:
             n_heads=n_heads,
             max_length=self.seq_len,
             first_corner=first_corner,
+            init_state=init_state,
+            tiles = tiles,
             device=self.device,
             )
         
@@ -277,10 +281,13 @@ class DecisionTransformerAC(nn.Module):
             n_decoder_layers,
             n_heads,
             first_corner,
+            init_state,
+            tiles,
             device,
             max_length,
     ):
         super().__init__()
+        self.tiles = tiles
         self.state_dim = state_dim
         self.bsize = state_dim - 2
         self.act_dim = act_dim
@@ -295,6 +302,7 @@ class DecisionTransformerAC(nn.Module):
             seq_len=self.seq_length,
             gamma=GAMMA,
             gae_lambda=GAE_LAMBDA,
+            init_state=init_state,
             first_corner=first_corner,
             device=device
         )
@@ -367,7 +375,7 @@ class DecisionTransformerAC(nn.Module):
 
 
 
-    def forward(self, states, actions, timesteps, tile_mask, attention_mask=None):
+    def forward(self, states, actions, timesteps, tile_mask, guide=True, attention_mask=None):
 
 
         #BOS   
@@ -409,6 +417,9 @@ class DecisionTransformerAC(nn.Module):
         )
 
         policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
+        
+        if guide:
+            tile_mask = self.guide_action(states_,timesteps_+1,tile_mask)
         policy_pred = self.policy_head(policy_logits,tile_mask)
         value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
 
@@ -428,6 +439,41 @@ class DecisionTransformerAC(nn.Module):
     def get_action(self, policy:torch.Tensor):
         return torch.multinomial(policy,1)
     
+
+
+    def guide_action(self, states, pos1d, mask):
+        """
+        Only implemented for ordinal encoding for now
+        """
+
+        i = (pos1d // self.bsize).squeeze(-1) + 1
+        j = (pos1d % self.bsize).squeeze(-1) + 1
+
+        colors = torch.zeros((2,pos1d.size()[0]),device=states.device)
+        #SOUTH COLORS
+        colors[0] = states[torch.arange(states.size()[0]),i-1,j,0]
+        #WEST COLORS
+        colors[1] = states[torch.arange(states.size()[0]),i,j-1,3]
+
+        south = (colors[0].unsqueeze(-1).unsqueeze(-1) == self.tiles.expand(colors.size()[1],-1,-1)).any(dim=-1)
+        west = (colors[1].unsqueeze(-1).unsqueeze(-1) == self.tiles.expand(colors.size()[1],-1,-1)).any(dim=-1)
+
+
+        new_mask = torch.logical_and(mask,south)
+        new_mask = torch.logical_and(new_mask,west)
+
+        if states.size()[0] == 1:
+            mask = mask.unsqueeze(0)
+
+        new_mask[torch.logical_not(new_mask.any(dim=-1))] = mask[torch.logical_not(new_mask.any(dim=-1))]
+
+        return new_mask
+
+
+
+
+
+
 class TransformerOutput(nn.Module):
 
     def __init__(self, shape):

@@ -22,7 +22,7 @@ N_COLORS = 23
 # -------------------- NETWORK SETTINGS -------------------- 
 
 DIM_EMBED= 15
-HIDDEN_SIZE = 6
+HIDDEN_SIZE = 2048
 N_ENCODER_LAYERS = 2
 N_DECODER_LAYERS = 1
 N_HEADS = 3
@@ -39,7 +39,7 @@ DEBUG = False
 # set CUDA_ONLY to True to force cuda.
 CUDA_ONLY = True
 CPU_TRAINING = False
-UNIT = torch.float
+UNIT = torch.half
 ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
@@ -52,10 +52,10 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 1
-NUM_WORKERS = 2
+NUM_WORKERS = 6
 CHECKPOINT_PERIOD = 100
 MINIBATCH_SIZE = 9
-HORIZON = 99# in number of steps, if you want the whole episode
+HORIZON = 9# in number of steps, if you want the whole episode
 # MEM_SIZE = 200 # in number of episodes
 SEQ_LEN = 99
 OPT_EPSILON = 1e-4
