@@ -106,7 +106,6 @@ class PPOAgent:
                 
                 batch_policy, batch_value = self.model(
                     batch_states,
-                    batch_tile_seq,
                     batch_timesteps,
                     batch_masks,
                 )
@@ -198,9 +197,8 @@ class PPOAgent:
         torch.save(self.model.critic_head.state_dict(), f'{dir}/heads/critic_{episode}.pt')
 
 
-        torch.save(self.model.embed_actions.state_dict(), f'{dir}/embeds/action_{episode}.pt')
+        torch.save(self.model.embed_tiles.state_dict(), f'{dir}/embeds/action_{episode}.pt')
         torch.save(self.model.embed_state.state_dict(), f'{dir}/embeds/state_{episode}.pt')
-        torch.save(self.model.embed_timestep.state_dict(), f'{dir}/embeds/time_{episode}.pt')
 
 
     def load_model(self,load_dict:dict):
@@ -215,7 +213,6 @@ class PPOAgent:
         * critic_head : the critic head
         * embed_action : action color embedding
         * embed_state : state color embedding
-        * embed_time : timestep embedding
         """
 
         main_dir = 'models/checkpoint'
@@ -237,16 +234,12 @@ class PPOAgent:
                 'model':self.model.critic_head,
                 'dir':f'{main_dir}/heads'
                 },
-            'embed_action': {
-                'model':self.model.embed_actions,
+            'embed_tiles': {
+                'model':self.model.embed_tiles,
                 'dir':f'{main_dir}/embeds'
                 },
             'embed_state': {
                 'model':self.model.embed_state,
-                'dir':f'{main_dir}/embeds'
-                },
-            'embed_time': {
-                'model':self.model.embed_timestep,
                 'dir':f'{main_dir}/embeds'
                 },
         }
@@ -368,55 +361,54 @@ class DecisionTransformerAC(nn.Module):
         wandb.watch(self.critic_head,log='all',log_freq=500)
             
         self.dim_embed = dim_embed 
-        self.embed_timestep = nn.Embedding(self.act_dim, 4*dim_embed,device=device,dtype=UNIT)
-        self.embed_actions = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
+        self.embed_tiles = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
         self.embed_state = nn.Embedding(N_COLORS,dim_embed,device=device,dtype=UNIT)
         self.positional_encoding = PE3D(dim_embed)
         self.embed_ln = nn.LayerNorm(4*dim_embed,eps=1e-5,device=device,dtype=UNIT)
 
 
 
-    def forward(self, states, actions, timesteps, tile_mask, guide=True, attention_mask=None):
+    def forward(self, states, timesteps, tile_mask, guide=True, attention_mask=None):
 
 
         #BOS   
+
 
         if states.dim() == 4:
 
             batch_size = states.shape[0]
             states_ = states
-            actions_ = actions.unsqueeze(-1)
             timesteps_ = timesteps.unsqueeze(-1)
         else:
             batch_size = 1
             states_ = states.unsqueeze(0)
-            actions_ = actions.unsqueeze(0)
             timesteps_ = timesteps.unsqueeze(0)
 
         # embed each modality with a different head
-        key_padding_mask = (torch.any((actions_ == -1).squeeze(-1),-1))
-        actions_embeddings = self.embed_actions(actions_.int() + 2).reshape(batch_size, self.seq_length,self.dim_embed * 4)
-        time_embeddings = self.embed_timestep(timesteps_)
-        actions_embeddings = actions_embeddings + time_embeddings
+        tiles_embeddings = self.embed_tiles(self.tiles.int()).reshape(self.act_dim,self.dim_embed * 4)
+        tiles_embeddings = tiles_embeddings.expand(batch_size,-1,-1)
+
         state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
         state_embeddings += self.positional_encoding(state_embeddings)
         state_embeddings = state_embeddings.view(-1,self.bsize**2,self.dim_embed * 4)
 
-        tgt_inputs = self.embed_ln(actions_embeddings)
+        src_inputs = self.embed_ln(tiles_embeddings)
 
-        # we feed in the input embeddings (not word indices as in NLP) to the model
+        key_padding_mask = None # FIXME:
+
+
         policy_tokens = self.actor_dt(
-            src=state_embeddings,
-            tgt=tgt_inputs,
+            src=src_inputs,
+            tgt=state_embeddings,
             tgt_key_padding_mask=key_padding_mask
         )
 
         value_tokens = self.critic_dt(
-            src=state_embeddings,
-            tgt=tgt_inputs,
+            src=src_inputs,
+            tgt=state_embeddings,
             tgt_key_padding_mask=key_padding_mask
         )
-
+        print(timesteps)
         policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
         
         if guide:
@@ -428,10 +420,10 @@ class DecisionTransformerAC(nn.Module):
         # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
 
         # reshape x so that the second dimension corresponds to the original
-        # returns (0), states (1), or actions (2); i.e. x[:,1,t] is the token for s_t
+        # returns (0), states (1), or tiles (2); i.e. x[:,1,t] is the token for s_t
 
         # get predictions
-        # policy_preds = self.policy_head(x[:,2,-1,:])  # predict next actions given state
+        # policy_preds = self.policy_head(x[:,2,-1,:])  # predict next tiles given state FIXME:
         # value_preds = self.value_head(x[:,1,-1,:])
 
         return policy_pred, value_pred

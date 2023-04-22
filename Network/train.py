@@ -206,7 +206,6 @@ def rollout(worker:DecisionTransformerAC,
         with torch.no_grad():
             policy, value = worker(
                 state,
-                worker.ep_buf.tile_seq[worker.ep_buf.ptr-1],
                 torch.tensor(step,device=device),
                 mask,
             )
