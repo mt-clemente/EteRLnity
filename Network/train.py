@@ -46,7 +46,6 @@ def train_model(hotstart:str = None):
     'epochs' : EPOCHS ,
     'minibatch_size' : MINIBATCH_SIZE,
     'horizon' : HORIZON,
-    'seq_len' : SEQ_LEN,
     'state_dim' : bsize+2,
     'n_encoder_layers':N_ENCODER_LAYERS,
     'n_decoder_layers':N_DECODER_LAYERS,

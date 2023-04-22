@@ -26,7 +26,6 @@ class PPOAgent:
         self.epochs = config['epochs']
         self.minibatch_size = config['minibatch_size']
         self.horizon = config['horizon']
-        self.seq_len = config['seq_len']
         self.state_dim = config['state_dim']
         self.entropy_weight = config['entropy_weight']
         self.value_weight = config['value_weight']
@@ -50,7 +49,6 @@ class PPOAgent:
             n_decoder_layers=n_decoder_layers,
             n_encoder_layers=n_encoder_layers,
             n_heads=n_heads,
-            max_length=self.seq_len,
             first_corner=first_corner,
             init_state=init_state,
             tiles = tiles,
@@ -277,7 +275,6 @@ class DecisionTransformerAC(nn.Module):
             init_state,
             tiles,
             device,
-            max_length,
     ):
         super().__init__()
         self.tiles = tiles
@@ -286,17 +283,16 @@ class DecisionTransformerAC(nn.Module):
         self.bsize = state_dim - 2
         self.act_dim = act_dim
         self.hidden_size = hidden_size
-        self.seq_length = max_length
 
 
         self.ep_buf = EpisodeBuffer(
             ep_len=self.act_dim,
             bsize=state_dim,
             horizon=HORIZON,
-            seq_len=self.seq_length,
             gamma=GAMMA,
             gae_lambda=GAE_LAMBDA,
             init_state=init_state,
+            seq_len=act_dim,
             first_corner=first_corner,
             device=device
         )
@@ -364,7 +360,8 @@ class DecisionTransformerAC(nn.Module):
         self.embed_tiles = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
         self.embed_state = nn.Embedding(N_COLORS,dim_embed,device=device,dtype=UNIT)
         self.positional_encoding = PE3D(dim_embed)
-        self.embed_ln = nn.LayerNorm(4*dim_embed,eps=1e-5,device=device,dtype=UNIT)
+        self.embed_state_ln = nn.LayerNorm(4*dim_embed,eps=1e-5,device=device,dtype=UNIT)
+        self.embed_tile_ln = nn.LayerNorm(4*dim_embed,eps=1e-5,device=device,dtype=UNIT)
 
 
 
@@ -392,27 +389,29 @@ class DecisionTransformerAC(nn.Module):
         state_embeddings += self.positional_encoding(state_embeddings)
         state_embeddings = state_embeddings.view(-1,self.bsize**2,self.dim_embed * 4)
 
-        src_inputs = self.embed_ln(tiles_embeddings)
+        src_inputs = self.embed_tile_ln(tiles_embeddings)
+        tgt_inputs = self.embed_state_ln(state_embeddings)
 
-        key_padding_mask = None # FIXME:
+        tgt_key_padding_mask = torch.arange(self.act_dim+1,device=timesteps_.device).repeat(batch_size,1) > timesteps_
 
+        if guide:
+            tile_mask = self.guide_action(states_,timesteps_+1,tile_mask)
 
         policy_tokens = self.actor_dt(
             src=src_inputs,
-            tgt=state_embeddings,
-            tgt_key_padding_mask=key_padding_mask
+            tgt=tgt_inputs,
+            src_key_padding_mask=tile_mask,
+            tgt_key_padding_mask=tgt_key_padding_mask
         )
 
         value_tokens = self.critic_dt(
             src=src_inputs,
-            tgt=state_embeddings,
-            tgt_key_padding_mask=key_padding_mask
+            tgt=tgt_inputs,
+            tgt_key_padding_mask=tgt_key_padding_mask
         )
-        print(timesteps)
+
         policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
         
-        if guide:
-            tile_mask = self.guide_action(states_,timesteps_+1,tile_mask)
         policy_pred = self.policy_head(policy_logits,tile_mask)
         value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
 

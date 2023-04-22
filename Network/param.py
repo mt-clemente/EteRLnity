@@ -52,12 +52,11 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 1
-NUM_WORKERS = 6
+NUM_WORKERS = 2
 CHECKPOINT_PERIOD = 100
 MINIBATCH_SIZE = 9
 HORIZON = 9# in number of steps, if you want the whole episode
 # MEM_SIZE = 200 # in number of episodes
-SEQ_LEN = 99
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 0.95
@@ -73,7 +72,6 @@ CONFIG = {
     'Encoder layers':N_ENCODER_LAYERS,
     'Decoder layers':N_DECODER_LAYERS,
     'Horizon':HORIZON,
-    'Transformer sequence length':SEQ_LEN,
     'N_HEADS':N_HEADS,
     'GAE_LAMBDA':GAE_LAMBDA,
     'ENTROPY_WEIGHT':ENTROPY_WEIGHT,
