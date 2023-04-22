@@ -99,7 +99,8 @@ def train_model(hotstart:str = None):
 
                 if best_conf > conf:
                     best_conf = conf
-                    best_sol = new_state
+                    if step +  HORIZON >= n_tiles or HORIZON > n_tiles / 2:
+                        best_sol = new_state
 
 
             avg_conf = avg_conf / NUM_WORKERS
@@ -120,7 +121,7 @@ def train_model(hotstart:str = None):
             rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
             timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
 
-            print(state_buf.min())
+            print-(state_buf.min())
 
             wandb.log({
                 'Mean batch reward' : rew_buf.mean(),
@@ -184,7 +185,7 @@ def train_model(hotstart:str = None):
 
     list_sol = to_list(best_sol,bsize)
     print(pz.verify_solution(list_sol))
-    pz.print_solution(list_sol)
+    pz.print_solution(list_sol,"run_solution")
 
 
 def rollout(worker:DecisionTransformerAC,
