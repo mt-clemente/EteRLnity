@@ -213,10 +213,10 @@ def rollout(worker:DecisionTransformerAC,
         selected_tile = tiles[selected_tile_idx]
         new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
 
-        # if step == n_tiles - 2:
-        #     reward = get_connections(new_state,bsize,step) / n_tiles
-        # else :
-        #     reward = 0
+        if step == n_tiles - 2:
+             reward = get_connections(new_state,bsize,step) * 0.5
+            
+        print(step,reward)
 
         worker.ep_buf.push(
             state=state,

@@ -270,18 +270,19 @@ def place_tile(state:Tensor,tile:Tensor,ep_step:int,step_offset:int=0):
     step = ep_step + step_offset
     state = state.clone()
     bsize = state.size()[0] - 2
-    best_rew = -1
-    best_connect = 0
+    best_conflict = -10
+    best_connect = -1
     for _ in range(4):
         tile = tile.roll(COLOR_ENCODING_SIZE,-1)
         state[step // bsize + 1, step % bsize + 1,:] = tile
-        connect,reward = filling_connections(state,bsize,step)
-        if reward > best_rew:
-            best_state=state.clone()
-            best_rew=reward
-            best_connect = connect
+        conflicts, connect = filling_connections(state,bsize,step)
 
-    return best_state, best_rew - 1.5, best_connect
+        if connect > best_connect:
+            best_state=state.clone()
+            best_connect = connect
+            best_conflict = conflicts
+
+    return best_state, -best_conflict, best_connect
 
 def streak(streak_length:int, n_tiles):
     return (2 - exp(-streak_length * 3/(0.8 * n_tiles)))
@@ -289,6 +290,7 @@ def streak(streak_length:int, n_tiles):
 
 
 def filling_connections(state:Tensor, bsize:int, step):
+    # FIXME: Remove rew?
     i = step // bsize + 1
     j = step % bsize + 1
     west_tile_color = state[i,j-1,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
@@ -297,9 +299,11 @@ def filling_connections(state:Tensor, bsize:int, step):
     west_border_color = state[i,j,1*COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
     south_border_color = state[i,j,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
 
+    sides = 0
     connections = 0
     reward = 0
 
+    sides += 1
     if j == 1:
         if torch.all(west_border_color == 0):
             reward += 2
@@ -309,6 +313,7 @@ def filling_connections(state:Tensor, bsize:int, step):
         connections += 1
         reward += 1
 
+    sides += 1
     if i == 1:
         if torch.all(south_border_color == 0):
             connections += 1
@@ -322,21 +327,21 @@ def filling_connections(state:Tensor, bsize:int, step):
     if j == bsize:
 
         east_border_color = state[i,j,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
-
+        sides += 1
         if torch.all(east_border_color == 0):
             connections += 1
             reward += 2
-    
+
 
     if i == bsize:
 
         north_border_color = state[i,j,:COLOR_ENCODING_SIZE]
+        sides += 1
         if torch.all(north_border_color == 0):
             reward += 2
             connections += 1
     
-
-    return connections, reward
+    return sides - connections, connections
 
 
 

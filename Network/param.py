@@ -22,11 +22,11 @@ N_COLORS = 23
 # -------------------- NETWORK SETTINGS -------------------- 
 
 DIM_EMBED= 15
-HIDDEN_SIZE = 2048
-N_ENCODER_LAYERS = 2
-N_DECODER_LAYERS = 1
-N_HEADS = 3
-GAE_LAMBDA = 0.99
+HIDDEN_SIZE = 256
+N_ENCODER_LAYERS = 6
+N_DECODER_LAYERS = 6
+N_HEADS = 15
+GAE_LAMBDA = 1
 ENTROPY_WEIGHT = 0.03
 VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
@@ -52,14 +52,14 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 1
-NUM_WORKERS = 2
+NUM_WORKERS = 4
 CHECKPOINT_PERIOD = 100
 MINIBATCH_SIZE = 9
 HORIZON = 9# in number of steps, if you want the whole episode
 # MEM_SIZE = 200 # in number of episodes
 OPT_EPSILON = 1e-4
 LR = 1e-3
-GAMMA = 0.95
+GAMMA = 1
 CLIP_EPS = 0.1
 
 CONFIG = {
