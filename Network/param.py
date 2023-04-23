@@ -22,7 +22,7 @@ N_COLORS = 23
 # -------------------- NETWORK SETTINGS -------------------- 
 
 DIM_EMBED= 15
-HIDDEN_SIZE = 512
+HIDDEN_SIZE = 1
 N_ENCODER_LAYERS = 4
 N_DECODER_LAYERS = 4
 N_HEADS = 15
@@ -54,13 +54,13 @@ else:
 EPOCHS = 1
 NUM_WORKERS = 1
 CHECKPOINT_PERIOD = 100
-MINIBATCH_SIZE = 3
-HORIZON = 14# in number of steps, if you want the whole episode
+MINIBATCH_SIZE = 99
+HORIZON = 99# in number of steps, if you want the whole episode
 # MEM_SIZE = 200 # in number of episodes
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 1
-CLIP_EPS = 0.1
+CLIP_EPS = 0.3
 
 CONFIG = {
     'unit':UNIT,

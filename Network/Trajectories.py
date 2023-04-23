@@ -132,9 +132,9 @@ class EpisodeBuffer:
         self.ptr = 0
 
     def __getitem__(self,key):
-
+        
         if self.ptr == self.ep_len:
-            return getattr(self,key)[self.ptr-1-self.horizon:self.ptr]
+            return getattr(self,key)[self.ptr-self.horizon:self.ptr]
         else:
             return getattr(self,key)[self.ptr-1-self.horizon:self.ptr-1]
 

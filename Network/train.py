@@ -120,7 +120,16 @@ def train_model(hotstart:str = None):
             rtg_buf = torch.hstack([worker.ep_buf['rtg_buf'] for worker in agent.workers]).to(training_device)
             timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
 
-
+            print(state_buf.size())
+            print(act_buf.size())
+            print(tile_seq.size())
+            print(mask_buf.size())
+            print(adv_buf.size())
+            print(rew_buf.size())
+            print(policy_buf.size())
+            print(rtg_buf.size())
+            print(timestep_buf.size())
+            print(adv_buf.min())
             wandb.log({
                 'Mean batch reward' : rew_buf.mean(),
                 'Advantage repartition': adv_buf,
