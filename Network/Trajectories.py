@@ -90,10 +90,6 @@ class EpisodeBuffer:
         next_values = self.next_value_buf[bot:top]
         finals = self.final_buf[bot:top]
 
-        # print(rewards)
-        # print(values)
-        # print(next_values)
-        # print(finals)
 
         td_errors = rewards + gamma * next_values * (1 - finals) - values
         gae = 0

@@ -226,8 +226,9 @@ def rollout(worker:DecisionTransformerAC,
             value=value,
             reward=reward,
             ep_step=step,
-            final= (step == (n_tiles-1))
+            final= (step == (n_tiles-2))
         )
+
     
         if step == n_tiles-2 or (step) % horizon == 0 and step != 0:
             horizon_end = True
