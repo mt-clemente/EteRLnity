@@ -8,6 +8,8 @@ from Network.utils import *
 from Network.param import *
 import wandb
 
+from solver_advanced import infer_model_size
+
 LOG_EVERY = 1
 
 def train_model(hotstart:str = None):
@@ -58,6 +60,35 @@ def train_model(hotstart:str = None):
     'device' : device,
     'first_corner':first_corner
     }
+
+    load_list = [
+        'actor_dt',
+        'critic_dt',
+        'embed_tiles',
+        'embed_state',
+    ]
+
+    cfg['n_encoder_layers'], cfg['n_decoder_layers'], cfg['hidden_size'] = infer_model_size("models/Inference/D")
+
+    cfg['first_corner'] = first_corner
+    cfg['n_tiles'] = n_tiles
+    cfg['state_dim'] = bsize + 2
+
+    load_list = [
+        'actor_dt',
+        'critic_dt',
+        'embed_tiles',
+        'embed_state',
+    ]
+
+    agent = PPOAgent(
+        config=cfg,
+        eval_model_dir="models/Inference/D",
+        tiles=tiles,
+        init_state=init_state,
+        load_list=load_list,
+        device=device
+    ).model
 
 
     agent = PPOAgent(cfg,tiles,init_state)

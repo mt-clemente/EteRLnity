@@ -37,8 +37,8 @@ DEBUG = False
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = False
-CPU_TRAINING = True
+CUDA_ONLY = True
+CPU_TRAINING = False
 UNIT = torch.float
 ENCODING = 'ordinal'
 
