@@ -3,3 +3,4 @@ solution.txt
 *.png
 wandb
 models
+*inf6102

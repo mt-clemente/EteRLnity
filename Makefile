@@ -46,5 +46,8 @@ gameD:
 gameE:
 	python3 main.py --agent=advanced --infile=instances/eternity_E.txt
 
+gameF:
+	python3 main.py --agent=advanced --infile=instances/eternity_complet.txt
+
 clean:
 	rm -rf models/checkpoint/*

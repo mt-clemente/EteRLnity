@@ -15,11 +15,11 @@ N_COLORS = 23
 # -------------------- NETWORK SETTINGS -------------------- 
 
 DIM_EMBED= 15
-HIDDEN_SIZE = 128
+HIDDEN_SIZE = 512
 N_ENCODER_LAYERS = 4
 N_DECODER_LAYERS = 4
 N_HEADS = 15
-GAE_LAMBDA = 1
+GAE_LAMBDA = 0.85
 ENTROPY_WEIGHT = 0.03
 VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
@@ -28,11 +28,8 @@ POLICY_WEIGHT = 1
 
 DEBUG = False
 
-# CUDA can be slower for inference so cpu is used, except for training
-# set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = False
-CPU_TRAINING = True
-UNIT = torch.float
+CPU_TRAINING = False
+UNIT = torch.half
 ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
@@ -55,8 +52,8 @@ HORIZON = 48
 
 OPT_EPSILON = 1e-4
 LR = 1e-3
-GAMMA = 1
-CLIP_EPS = 0.3
+GAMMA = 0.92
+CLIP_EPS = 0.12
 
 CONFIG = {
     'unit':UNIT,

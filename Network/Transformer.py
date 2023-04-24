@@ -29,7 +29,7 @@ class PPOAgent:
         self.value_weight = config['value_weight']
         self.gae_lambda = config['gae_lambda']
         if device is None:
-            self.device = 'cuda' if torch.cuda.is_available() and CUDA_ONLY else 'cpu'
+            self.device = 'cuda' if torch.cuda.is_available()  else 'cpu'
         else:
             self.device = device
         n_tiles = config['n_tiles']
@@ -69,7 +69,6 @@ class PPOAgent:
 
         if not eval_model_dir is None:
             self.load_model(eval_model_dir,load_list)
-            # self.model.eval()
         
 
         self.workers = nn.ModuleList([copy.deepcopy(self.model) for i in range(NUM_WORKERS)])
@@ -185,8 +184,6 @@ class PPOAgent:
             worker.load_state_dict(self.model.state_dict())
 
 
-        if not CUDA_ONLY:
-            self.model = self.model.cpu()
     
     def save_models(self,dir:str,episode:int):
 

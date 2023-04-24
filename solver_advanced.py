@@ -1,6 +1,5 @@
 import random
 from Network.Transformer import PPOAgent
-from Network.param import CPU_TRAINING, CUDA_ONLY
 from Network.utils import get_conflicts, initialize_sol, place_tile, to_list, get_connections
 from eternity_puzzle import EternityPuzzle
 import torch
@@ -17,13 +16,12 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
     :return: a tuple (solution, cost) where solution is a list of the pieces (rotations applied) and
         cost is the cost of the solution
     """
-    if torch.cuda.is_available() and not CUDA_ONLY:
-        # agent = agent.cuda() #FIXME:
+    if torch.cuda.is_available():
         device = 'cuda'
     else:
         device = 'cpu' 
 
-    DURATION = timedelta(seconds=3600)
+    DURATION = timedelta(minutes=15)
     # -------------------- GAME INIT --------------------
     bsize = eternity_puzzle.board_size
 
@@ -57,6 +55,8 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
             eval_model_dir = "models/Inference/D"
         case 10:
             eval_model_dir = "models/Inference/E"
+        case 16:
+            eval_model_dir = "models/Inference/F"
 
     init_state, tiles, first_corner,n_tiles = initialize_sol(eternity_puzzle,device)
 
@@ -98,7 +98,7 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
         lds.reset()
         state = init_state
         
-        while step != n_tiles - 2:
+        while step != n_tiles - 1:
 
             policy, value = agent(
                 state,
@@ -126,8 +126,9 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
         
 
     list_sol = to_list(best_sol,bsize)
+    eternity_puzzle.display_solution(list_sol,'outoutout')
 
-    return list_sol, get_conflicts(best_sol)
+    return list_sol, get_conflicts(best_sol,bsize)
 
 
 

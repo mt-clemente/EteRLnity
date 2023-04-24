@@ -20,7 +20,7 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
 
     T_0 = 100
     ALPHA = 0.99
-    DURATION = 500
+    DURATION = 3600
     MAX_TIMEOUT = 1
     BETA = 10
     BETA_VAR = 0.1

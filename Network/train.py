@@ -126,6 +126,7 @@ def train_model(hotstart:str = None):
                     best_conf = conf
                     if step +  HORIZON >= n_tiles or HORIZON > n_tiles / 2:
                         best_sol = new_state
+                        pz.print_solution(to_list(best_sol,bsize),f"B_{episode}.txt")
 
 
             avg_conf = avg_conf / NUM_WORKERS
@@ -137,7 +138,6 @@ def train_model(hotstart:str = None):
 
             state_buf = torch.vstack([worker.ep_buf['state_buf'] for worker in agent.workers]).to(training_device)
             act_buf = torch.hstack([worker.ep_buf['act_buf'] for worker in agent.workers]).to(training_device)
-            tile_seq = torch.vstack([worker.ep_buf['tile_seq'] for worker in agent.workers]).to(training_device)
             mask_buf = torch.vstack([worker.ep_buf['mask_buf'] for worker in agent.workers]).to(training_device)
             adv_buf = torch.hstack([worker.ep_buf['adv_buf'] for worker in agent.workers]).to(training_device)
             rew_buf = torch.hstack([worker.ep_buf['rew_buf'] for worker in agent.workers]).to(training_device)
@@ -156,7 +156,6 @@ def train_model(hotstart:str = None):
             dataset = TensorDataset(
                 state_buf,
                 act_buf,
-                tile_seq,
                 mask_buf,
                 adv_buf,
                 policy_buf,

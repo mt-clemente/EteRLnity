@@ -1,3 +1,5 @@
+You can configure the training in the Network/param.py file
+
 To train instances use $ make a for instance A, $make b for B and so on.
 
 If you want to test the models you train, put them in the models/inference folder as follows (for instance A):
