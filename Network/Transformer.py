@@ -1,20 +1,16 @@
 import copy
-import math
-import os
 from pathlib import Path
-from matplotlib import pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 from datetime import datetime
-from einops import rearrange, repeat
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from Network.param import *
 from Network.Trajectories import EpisodeBuffer
-from torch.utils.data import TensorDataset,DataLoader
+from torch.utils.data import DataLoader
 # -------------------- AGENT --------------------
 
 class PPOAgent:
@@ -104,7 +100,6 @@ class PPOAgent:
                 (
                     batch_states,
                     batch_actions,
-                    batch_tile_seq,
                     batch_masks,
                     batch_advantages,
                     batch_old_policies,
@@ -427,15 +422,6 @@ class DecisionTransformerAC(nn.Module):
         policy_pred = self.policy_head(policy_logits,tile_mask)
         value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),(timesteps)%(HORIZON+1)].reshape(batch_size,self.dim_embed*4))
 
-        # policy_ouputs = policy_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
-        # value_ouputs = value_ouputs.reshape(batch_size, 3, self.seq_length, self.dim_embed)
-
-        # reshape x so that the second dimension corresponds to the original
-        # returns (0), states (1), or tiles (2); i.e. x[:,1,t] is the token for s_t
-
-        # get predictions
-        # policy_preds = self.policy_head(x[:,2,-1,:])  # predict next tiles given state FIXME:
-        # value_preds = self.value_head(x[:,1,-1,:])
 
         return policy_pred, value_pred
 

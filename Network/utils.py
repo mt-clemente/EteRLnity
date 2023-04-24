@@ -1,11 +1,8 @@
 import argparse
 from math import exp
-import os
-import random
-import sys
 import torch
 from torch import Tensor
-from einops import rearrange, repeat
+from einops import rearrange
 from Network.eternity import EternityPuzzle
 from Network.param import *
 
@@ -23,6 +20,9 @@ def parse_arguments():
 
 
 def initialize_sol(pz:EternityPuzzle, device):
+    """
+    Initializes the solution. The first corner is already play to remove symmetries.
+    """
 
     n_tiles = len(pz.piece_list)
     tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device)
@@ -39,25 +39,6 @@ def initialize_sol(pz:EternityPuzzle, device):
     return state, tiles, first_corner, n_tiles
 
 
-
-
-def pprint(state,bsize):
-    offset = (PADDED_SIZE - bsize) // 2
-
-    if state.size()[0] != PADDED_SIZE:
-        for s in state:
-            print(s[offset:offset+bsize,offset:offset+bsize])
-
-    else:
-        print(state[offset:offset+bsize,offset:offset+bsize])
-        
-
-
-
-def ucb(q,count,step):
-
-    return q + 0 * torch.sqrt(-torch.log((count + 0.1)/(step + 0.1)))
-
 def binary(x: Tensor, bits):
     mask = 2**torch.arange(bits)
     return x.unsqueeze(-1).bitwise_and(mask).ne(0).to(UNIT)
@@ -66,14 +47,7 @@ def binary(x: Tensor, bits):
 def to_tensor(list_sol:list, encoding = ENCODING,gray_borders:bool=False) -> Tensor:
     """
     Converts solutions from list format to a torch Tensor.
-    Tensor format:
-    [MAX_BSIZE, MAX_BSIZE, N_COLORS * 4]
-    Each tile is represented as a vector, consisting of concatenated one hot encoding of the colors
-    in the order  N - S - E - W . 
-    If there were 4 colors a grey tile would be :
-        N       S       E       W
-    [1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0]
-    TODO: convert the list to tensor once 
+    Beware, the order of NSEW is not the same, as NSEW tiles cannot be rotated easily.
     """
 
     # To be able to rotate tiles easily, it is better to have either NESW or NWSE
@@ -194,20 +168,13 @@ def base10(x:Tensor):
         s += x[i] * 2**i
     
     return int(s)
-
-def pprint(state,bsize):
-    offset = (MAX_BSIZE + 2 - bsize) // 2
-
-    if state.size()[0] != MAX_BSIZE + 2:
-        for s in state:
-            print(s[offset:offset+bsize,offset:offset+bsize])
-
-    else:
-        print(state[offset:offset+bsize,offset:offset+bsize])
         
 
 
 def to_list(sol:torch.Tensor,bsize:int) -> list:
+    """
+    Converts the tensor solution back to a list solution.
+    """
 
     orientation = [0,2,1,3]
 
@@ -264,7 +231,7 @@ def to_list(sol:torch.Tensor,bsize:int) -> list:
 def place_tile(state:Tensor,tile:Tensor,ep_step:int,step_offset:int=0):
     """
     If you start with a prefilled board with k pieces, you need to place tiles at spot
-    k + 1, hence the need for a step offset when the first corner is locked in
+    k + 1, hence the need for a step offset.
     """
     step = ep_step + step_offset
     state = state.clone()
@@ -289,7 +256,9 @@ def streak(streak_length:int, n_tiles):
 
 
 def filling_connections(state:Tensor, bsize:int, step):
-    # FIXME: Remove rew?
+    """
+    Calculates the created conflicts and connections when placing one tile
+    """
     i = step // bsize + 1
     j = step % bsize + 1
     west_tile_color = state[i,j-1,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
@@ -345,3 +314,43 @@ def filling_connections(state:Tensor, bsize:int, step):
 
 
 
+
+def get_conflicts(state:Tensor, bsize:int) -> int:
+
+    connections = get_connections(state,bsize)
+    max_connections = (bsize + 1) * bsize * 2
+
+    return max_connections - connections
+
+
+
+def get_connections(state:Tensor, bsize:int) -> int:
+    offset = 1
+    mask = torch.ones(bsize**2)
+    board = state[offset:offset+bsize,offset:offset+bsize].clone()
+    
+    extended_board = state[offset-1:offset+bsize+1,offset-1:offset+bsize+1]
+
+    n_offset = extended_board[2:,1:-1,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE]
+    s_offset = extended_board[:-2,1:-1,:COLOR_ENCODING_SIZE]
+    w_offset = extended_board[1:-1,:-2,3*COLOR_ENCODING_SIZE:4*COLOR_ENCODING_SIZE]
+    e_offset = extended_board[1:-1,2:,COLOR_ENCODING_SIZE:2*COLOR_ENCODING_SIZE]
+
+    n_connections = board[:,:,:COLOR_ENCODING_SIZE] == n_offset
+    s_connections = board[:,:,2*COLOR_ENCODING_SIZE:3*COLOR_ENCODING_SIZE] == s_offset
+    w_connections = board[:,:,COLOR_ENCODING_SIZE: 2*COLOR_ENCODING_SIZE] == w_offset
+    e_connections = board[:,:,3*COLOR_ENCODING_SIZE: 4*COLOR_ENCODING_SIZE] == e_offset
+
+
+
+    redundant_ns = torch.logical_and(n_connections[:-1,:],s_connections[1:,:])
+    redundant_we = torch.logical_and(w_connections[:,1:],e_connections[:,:-1])
+
+    redundant_connections = torch.all(redundant_we,dim=-1).sum() + torch.all(redundant_ns,dim=-1).sum()
+
+    all = (torch.all(n_connections,dim=-1).sum() + torch.all(s_connections,dim=-1).sum() + torch.all(e_connections,dim=-1).sum() + torch.all(w_connections,dim=-1).sum())
+    
+    total_connections = all - redundant_connections
+
+
+    return total_connections

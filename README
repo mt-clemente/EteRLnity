@@ -1,0 +1,18 @@
+To train instances use $ make a for instance A, $make b for B and so on.
+
+If you want to test the models you train, put them in the models/inference folder as follows (for instance A):
+
+
+models/
+    Inference/
+        A/
+            embeds/
+                embed_state.pt
+                embed_tiles.pt
+            heads/
+                actor_head.pt
+                critic_head.pt
+            transformers/
+                actor_dt.pt
+                critic_dt.pt
+

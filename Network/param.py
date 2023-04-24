@@ -5,13 +5,6 @@ torch.manual_seed(0)
 
 # -------------------- PUZZLE SETTINGS -------------------- 
 
-PATH = '/home/wsl/Polymtl/H23/INF6201/Projet/Network'
-
-
-# global 2-swap gives a size 32640 neighborhood which can be too much
-# for the GPU. Capping the swapping range helps reduce the neighborhood
-# without losing connectivity.
-
 MAX_BSIZE = 16
 PADDED_SIZE = MAX_BSIZE + 2
 
@@ -37,8 +30,8 @@ DEBUG = False
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = True
-CPU_TRAINING = False
+CUDA_ONLY = False
+CPU_TRAINING = True
 UNIT = torch.float
 ENCODING = 'ordinal'
 
@@ -51,12 +44,15 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 3
+EPOCHS = 1
 NUM_WORKERS = 3
 CHECKPOINT_PERIOD = 100
 MINIBATCH_SIZE = 8
-HORIZON = 80# in number of steps, if you want the whole episode
-# MEM_SIZE = 200 # in number of episodes
+# in number of steps, remember that the first tile is always placed
+# so for a 100 steps game, your max horizon will be 99. Horizon
+# needs to be smaller than an episode.
+HORIZON = 48
+
 OPT_EPSILON = 1e-4
 LR = 1e-3
 GAMMA = 1

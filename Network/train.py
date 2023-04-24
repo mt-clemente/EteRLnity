@@ -1,7 +1,6 @@
 import copy
 import torch
 from torch import Tensor
-from Network.train_monoagent import get_conflicts, get_connections
 from Network.Trajectories import *
 from Network.Transformer import DecisionTransformerAC, PPOAgent
 from Network.utils import *
@@ -25,7 +24,6 @@ def train_model(hotstart:str = None):
     n_tiles = len(pz.piece_list)
     bsize = pz.board_size
     hotstart = args.hotstart
-    # torch.cuda.is_available = lambda : False
     
 
     # -------------------- NETWORK INIT -------------------- 
@@ -34,9 +32,6 @@ def train_model(hotstart:str = None):
         device = 'cuda'
     else:
         device = 'cpu'
-
-    # if n_tiles % HORIZON:
-    #     raise UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON})")
 
     init_state, tiles, first_corner,n_tiles = initialize_sol(pz,device)
 
@@ -136,7 +131,6 @@ def train_model(hotstart:str = None):
             avg_conf = avg_conf / NUM_WORKERS
             
             if torch.cuda.is_available() and not CPU_TRAINING:
-                # agent = agent.cuda() #FIXME:
                 training_device = 'cuda'
             else:
                 training_device = 'cpu'

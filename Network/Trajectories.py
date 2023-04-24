@@ -69,7 +69,7 @@ class EpisodeBuffer:
             if self.rtg_buf.max() > 10000 or self.adv_buf.max() > 10000:
                 raise OSError(self.adv_buf)
 
-    def compute_gae_rtg(self,  gamma, gae_lambda): #FIXME:MASKS?
+    def compute_gae_rtg(self,  gamma, gae_lambda):
 
         if (self.ptr) % self.horizon != 0:
             # raise BufferError("Calculating GAE at wrong time")

@@ -1,15 +1,10 @@
-from hashlib import sha256
 import random
-import sys
-
 from Network.Transformer import PPOAgent
 from Network.param import CPU_TRAINING, CUDA_ONLY
-from Network.train_monoagent import get_conflicts, get_connections
-from Network.utils import initialize_sol, place_tile, to_list
+from Network.utils import get_conflicts, initialize_sol, place_tile, to_list, get_connections
 from eternity_puzzle import EternityPuzzle
 import torch
 from datetime import datetime,timedelta
-import configs
 from parse import parse
 
 
@@ -105,15 +100,13 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
         
         while step != n_tiles - 2:
 
-            t0 = datetime.now()            
-
             policy, value = agent(
                 state,
                 torch.tensor(step,device=state.device),
                 mask
             )
                     
-            selected_tile_idx = lds.get_action(policy,n_tiles-step)
+            selected_tile_idx = lds.get_action(policy,n_tiles - step)
             selected_tile = tiles[selected_tile_idx]
             new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
 
@@ -121,7 +114,6 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
             state = new_state
             step += 1
 
-            print(datetime.now() - t0)
 
 
         episode_score = get_connections(new_state,bsize)
@@ -135,7 +127,7 @@ def solve_advanced(eternity_puzzle:EternityPuzzle):
 
     list_sol = to_list(best_sol,bsize)
 
-    return list_sol
+    return list_sol, get_conflicts(best_sol)
 
 
 
@@ -218,10 +210,11 @@ class LimitedDiscrepancy:
     def get_action(self,policy:torch.Tensor,remaining_steps):
 
         # Choose amongst best actions
+        budget = min(self.budget,policy.size()[1]-1)
         if random.random() < self.budget / (remaining_steps) ** 0.2:
-            best_actions = (policy + self.epsilon).topk(self.budget+1, sorted=True).indices.squeeze(0)
+            best_actions = (policy + self.epsilon).topk(budget+1, sorted=True).indices.squeeze(0)
         else:
-            best_actions = (policy + self.epsilon).topk(self.budget+1, sorted=True).indices.squeeze(0)
+            best_actions = (policy + self.epsilon).topk(1, sorted=True).indices.squeeze(0)
 
         idx = random.randint(0,len(best_actions)-1)
 
@@ -246,43 +239,3 @@ class LimitedDiscrepancy:
     def reset(self):
         self.budget = self.max_descrepancy
 
-
-class TabuList:
-
-    def __init__(self,size,tabu_length) -> None:
-        self.size = size
-        self.tabu = {}
-        self.length = tabu_length
-
-    def push(self,state:torch.Tensor, step:int):
-        key = sha256(state.cpu().numpy()).hexdigest()
-        self.tabu[key] = step + self.length
-    
-    def in_tabu(self,state):
-        key = sha256(state.cpu().numpy()).hexdigest()
-        return key in self.tabu.keys()
-    
-    def update(self,step:int):
-        self.tabu = {k:v for k,v in self.tabu.items() if v > step}
-
-    def get_update(self,batch:torch.Tensor,step:int):
-
-        np_batch = batch.cpu().numpy()
-        for i in range(np_batch.shape[0]):
-
-            key = sha256(np_batch[i]).hexdigest()
-
-            if key not in self.tabu.keys():
-
-                self.push(batch[i],step)
-                return torch.from_numpy(np_batch[i]).to(device=batch.device).to(dtype=batch.dtype),i
-            
-        return None,None
-
-
-    def fast_foward(self):
-        vals = self.tabu.values()
-        m = min(vals)
-        print(m)
-        for k in self.tabu.keys():
-            self.tabu[k] -= m
