@@ -103,7 +103,7 @@ def choose_piece(i,j,solution,pieces,puzzle:EternityPuzzle):
 
         scores.append(len(adjacent_colors.intersection(set(p))))
 
-    best = np.argmin(scores)
+    best = np.argmax(scores)
     if isinstance(best,np.ndarray):
         p = pieces[best[0]]
     else:

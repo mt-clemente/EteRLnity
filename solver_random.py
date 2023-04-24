@@ -1,3 +1,4 @@
+from matplotlib import pyplot
 import numpy as np
 import copy
 
@@ -43,7 +44,9 @@ def solve_best_random(eternity_puzzle, n_trial):
 
     best_solution = None
 
-    for i in range(10):
+    score = []
+
+    for i in range(100000):
 
         cur_sol, cur_n_conflict = solve_random(eternity_puzzle)
 
@@ -51,6 +54,10 @@ def solve_best_random(eternity_puzzle, n_trial):
             best_n_conflict = cur_n_conflict
             best_solution = cur_sol
 
+        score.append(4*5*2 - cur_n_conflict)
+
+    pyplot.plot(score)
+    pyplot.savefig(f"{best_n_conflict}_Local.png")
     assert best_solution != None
 
     return best_solution, best_n_conflict

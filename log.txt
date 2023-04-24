@@ -1,0 +1,16 @@
+python3 main.py --agent=advanced --infile=instances/eternity_A.txt
+***********************************************************
+[INFO] Start the solving Eternity II
+[INFO] input file: instances/eternity_A.txt
+[INFO] output file: solution.txt
+[INFO] visualization file: visualization.png
+[INFO] board size: 4 x 4
+[INFO] solver selected: advanced
+***********************************************************
+0 0 60
+actor_dt
+critic_dt
+actor_head
+critic_head
+embed_tiles
+embed_state

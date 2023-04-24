@@ -22,7 +22,7 @@ N_COLORS = 23
 # -------------------- NETWORK SETTINGS -------------------- 
 
 DIM_EMBED= 15
-HIDDEN_SIZE = 1
+HIDDEN_SIZE = 128
 N_ENCODER_LAYERS = 4
 N_DECODER_LAYERS = 4
 N_HEADS = 15
@@ -37,9 +37,9 @@ DEBUG = False
 
 # CUDA can be slower for inference so cpu is used, except for training
 # set CUDA_ONLY to True to force cuda.
-CUDA_ONLY = True
-CPU_TRAINING = False
-UNIT = torch.half
+CUDA_ONLY = False
+CPU_TRAINING = True
+UNIT = torch.float
 ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
@@ -51,11 +51,11 @@ elif ENCODING == 'one_hot':
 else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
-EPOCHS = 1
-NUM_WORKERS = 1
+EPOCHS = 3
+NUM_WORKERS = 3
 CHECKPOINT_PERIOD = 100
-MINIBATCH_SIZE = 99
-HORIZON = 99# in number of steps, if you want the whole episode
+MINIBATCH_SIZE = 8
+HORIZON = 80# in number of steps, if you want the whole episode
 # MEM_SIZE = 200 # in number of episodes
 OPT_EPSILON = 1e-4
 LR = 1e-3

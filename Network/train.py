@@ -1,11 +1,11 @@
 import copy
 import torch
 from torch import Tensor
-from train_monoagent import get_conflicts, get_connections
-from Trajectories import *
-from Transformer import DecisionTransformerAC, PPOAgent
-from utils import *
-from param import *
+from Network.train_monoagent import get_conflicts, get_connections
+from Network.Trajectories import *
+from Network.Transformer import DecisionTransformerAC, PPOAgent
+from Network.utils import *
+from Network.param import *
 import wandb
 
 LOG_EVERY = 1
@@ -28,7 +28,7 @@ def train_model(hotstart:str = None):
 
     # -------------------- NETWORK INIT -------------------- 
 
-    if torch.cuda.is_available() and CUDA_ONLY: #FIXME:
+    if torch.cuda.is_available() : #FIXME:
         device = 'cuda'
     else:
         device = 'cpu'
@@ -36,7 +36,7 @@ def train_model(hotstart:str = None):
     # if n_tiles % HORIZON:
     #     raise UserWarning(f"Episode length ({n_tiles}) is not a multiple of horizon ({HORIZON})")
 
-    init_state, tiles, first_corner,n_tiles = initialize_sol(args.instance,device)
+    init_state, tiles, first_corner,n_tiles = initialize_sol(pz,device)
 
     cfg = {
     'n_tiles' : n_tiles ,
@@ -238,21 +238,3 @@ def rollout(worker:DecisionTransformerAC,
 
     return new_state,mask
 
-
-# ----------- MAIN CALL -----------
-
-if __name__ == "__main__"  and '__file__' in globals():
-
-    args = parse_arguments()
-    CONFIG['Instance'] = args.instance.replace('instances/','')
-    torch.autograd.set_detect_anomaly(True)
-    wandb.init(
-        project='EteRLnity',
-        entity='mateo-clemente',
-        group='Tests',
-        config=CONFIG
-    )
-
-    train_model()
-
-    wandb.finish()

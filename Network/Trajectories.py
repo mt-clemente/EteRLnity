@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from param import *
+from Network.param import *
 from hashlib import sha256
 from torch.utils.data import TensorDataset,DataLoader
 import torch.nn.init as init

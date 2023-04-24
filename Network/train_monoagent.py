@@ -1,9 +1,13 @@
 import torch
+
+
+
+
 from torch import Tensor
-from Trajectories import *
+# from .Trajectories import *
 from math import exp
-from utils import *
-from param import *
+from Network.utils import *
+from Network.param import *
 import wandb
 
 def place_tile(state:Tensor,tile:Tensor,step:int):
@@ -80,16 +84,16 @@ def filling_connections(state:Tensor, bsize:int, step):
         
         
 
-def get_conflicts(state:Tensor, bsize:int, step:int = 0) -> int:
+def get_conflicts(state:Tensor, bsize:int) -> int:
 
-    connections = get_connections(state,bsize,step)
+    connections = get_connections(state,bsize)
     max_connections = (bsize + 1) * bsize * 2
 
     return max_connections - connections
 
 
 
-def get_connections(state:Tensor, bsize:int, step:int = 0) -> int:
+def get_connections(state:Tensor, bsize:int) -> int:
     offset = 1
     mask = torch.ones(bsize**2)
     board = state[offset:offset+bsize,offset:offset+bsize].clone()

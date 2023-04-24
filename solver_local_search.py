@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from eternity_puzzle import EternityPuzzle
 from solver_heuristic import solve_heuristic, choose_piece
+from matplotlib import pyplot
 import numpy as np
 
 def solve_local_search(eternity_puzzle:EternityPuzzle):
@@ -17,9 +18,9 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
     best_sol = init_sol
     ann_sol = init_sol
 
-    T_0 = 10
-    ALPHA = 0.95
-    DURATION = 20
+    T_0 = 100
+    ALPHA = 0.99
+    DURATION = 500
     MAX_TIMEOUT = 1
     BETA = 10
     BETA_VAR = 0.1
@@ -30,6 +31,8 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
     beta_adjust = 0
     tabu = []
 
+    scores = []
+
     while datetime.now() < timedelta(seconds = DURATION) + START and best_cost != 0:
 
         step += 1
@@ -38,27 +41,21 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
         for i in range(board_size):
             for j in range(board_size):
                 
+                for k in range(1,4):
+                    n = ann_sol.copy()
+                    n[i,j] = eternity_puzzle.generate_rotation(n[i,j])[k]
+                    neighbors.append(n)
 
                 for ip in range(0,board_size):
                     for jp in range(0,board_size):
                         
-                        for k in range(1,4):
-                            n = ann_sol.copy()
-                            n[i,j] = eternity_puzzle.generate_rotation(n[i,j])[k]
-                            neighbors.append(n)
 
                         if (i*board_size +j >= ip * board_size + jp):
                             continue
 
-                        for k in range(4):
-                            for kp in range(4):
-
-                                n = ann_sol.copy()
-                                n[i,j] = eternity_puzzle.generate_rotation(n[i,j])[k]
-                                n[ip,jp] = eternity_puzzle.generate_rotation(n[ip,jp])[kp]
-
-                                n[i,j], n[ip,jp] = n[ip,jp].copy(), n[i,j].copy()
-                                neighbors.append(n)
+                        n = ann_sol.copy()
+                        n[i,j], n[ip,jp] = n[ip,jp].copy(), n[i,j].copy()
+                        neighbors.append(n)
 
         new_sol = neighbors[np.random.randint(len(neighbors))]
 
@@ -78,10 +75,11 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
 
             ann_sol = new_sol
 
-
+            scores.append(board_size * (board_size+1) * 2 - cost)
             if  cost < best_cost:
                 best_sol = new_sol
                 best_cost = cost
+                print(best_cost)
 
             beta_adjust = min(BETA, beta_adjust + BETA_VAR)
         
@@ -89,8 +87,10 @@ def solve_local_search(eternity_puzzle:EternityPuzzle):
             beta_adjust -= BETA_VAR
 
         
-        t *= ALPHA
+        t = min(t * ALPHA,1)
 
+    pyplot.plot(scores)
+    pyplot.savefig(f"{best_cost}_Local.png")
     return arr_to_list(best_sol), best_cost
 
 

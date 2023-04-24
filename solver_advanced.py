@@ -1,236 +1,288 @@
-from collections import namedtuple
-import gc
-import os
+from hashlib import sha256
+import random
 import sys
 
-from einops import repeat, rearrange
+from Network.Transformer import PPOAgent
+from Network.param import CPU_TRAINING, CUDA_ONLY
+from Network.train_monoagent import get_conflicts, get_connections
+from Network.utils import initialize_sol, place_tile, to_list
 from eternity_puzzle import EternityPuzzle
 import torch
-from solver_random import solve_random
-from math import ceil, comb
-
-sys.path.append('./Network')
-
-
-MAX_BSIZE = 16
-NORTH = 0
-SOUTH = 1
-WEST = 2
-EAST = 3
-
-GRAY = 0
-BLACK = 23
-RED = 24
-WHITE = 25
-N_COLORS = 23
-
-
-# -------------------- TRAINING SETTINGS -------------------- 
-ENCODING = 'ordinal'
-COLOR_ENCODING_SIZE = 4 * 5
-PARTIAL_OBSERVABILITY = 0.5 
-BATCH_NB = 50
-CHECKPOINT_PERIOD = 10000
-BATCH_SIZE = 32
-LR = 10**-8
-TARGET_UPDATE = 50
-MEM_SIZE = 20000
-PRIO_EPSILON = 1e-4
-ALPHA = 0.4
-BETA = 0.9
-GAMMA = 0.95
-TRAIN_FREQ = 100
-# THREADS = 50
-
-# FIXME:
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME: INIT SOL WITH GRAY TILES ON THE BORDERS
-# FIXME:
-# FIXME:
-# FIXME:
-# FIXME:
+from datetime import datetime,timedelta
+import configs
+from parse import parse
 
 
 
-
-def solve_advanced(eternity_puzzle:EternityPuzzle, hotstart:str = None):
+def solve_advanced(eternity_puzzle:EternityPuzzle):
 
     """
     Your solver for the problem
     :param eternity_puzzle: object describing the input
     :return: a tuple (solution, cost) where solution is a list of the pieces (rotations applied) and
         cost is the cost of the solution
-    TODO: Only 2-swap the inner tiles (not the borders), reduces the neighborhood size from 
-          nCr(16*16,2) to nCr(14*14,2) approx.
     """
-
-    # -------------------- GAME INIT --------------------
-
-    step = 0
-
-    bsize = eternity_puzzle.board_size
-    neighborhood_size =  comb((bsize-2)**2,2) + comb((bsize - 1) * 4, 2) # + bsize ** 2 * 4 
-    obs_neighborhood_size = int(PARTIAL_OBSERVABILITY * neighborhood_size)
-    observation_mask = (torch.cat(
-        (
-        torch.ones(obs_neighborhood_size),
-        torch.zeros(neighborhood_size - obs_neighborhood_size)
-        )) == 1
-        )
-
-
-
-    init_sol, _ = solve_random(eternity_puzzle)
-
-    state = to_tensor(init_sol,'binary')
-    print(state.size())
-
-    torch.save(state, 'binary')
-    state = to_tensor(init_sol,'ordinal')
-    print(state.size())
-
-    torch.save(state, 'ordinal')
-    state = to_tensor(init_sol,'one_hot')
-    print(state.size())
-    torch.save(state, 'one_hot')
-
-    raise OSError
-
-def binary(x: torch.Tensor, bits):
-    mask = 2**torch.arange(bits)
-    return x.unsqueeze(-1).bitwise_and(mask).to(UNIT)
-
-
-def to_tensor(sol:list, encoding = 'binary') -> torch.Tensor:
-    """
-    Converts solutions from list format to a torch Tensor.
-
-    Tensor format:
-    [MAX_BSIZE, MAX_BSIZE, N_COLORS * 4]
-    Each tile is represented as a vector, consisting of concatenated one hot encoding of the colors
-    in the order  N - S - E - W . 
-    If there were 4 colors a grey tile would be :
-        N       S       E       W
-    [1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0]
-
-    TODO: convert the list to tensor once 
-
-    """
-
-    if encoding == 'binary':
-        color_enc_size = ceil(torch.log2(torch.tensor(N_COLORS)))
-        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4*color_enc_size), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
-
-        # Tiles around the board
-        # To make sure the policy learns that the gray tiles are always one the border,
-        # the reward for connecting to those tiles is bigger.
-        tens[0,:,color_enc_size:2*color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[:,0,2*color_enc_size:color_enc_size*3] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[MAX_BSIZE+1,:,:color_enc_size] = binary(torch.tensor(GRAY),color_enc_size)
-        tens[:,MAX_BSIZE+1,3*color_enc_size:] = binary(torch.tensor(GRAY),color_enc_size)
-
-
-        b_size = int(len(sol)**0.5)
-
-        # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
-        #one hot encode the colors
-        for i in range(offset, offset + b_size):
-            for j in range(offset, offset + b_size):
-
-                tens[i,j,:] = 0
-
-                for dir in range(4):
-                    tens[i,j, dir * color_enc_size:(dir+1) * color_enc_size] = binary(torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir]),color_enc_size)
-
-    elif encoding == 'ordinal':
-        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
-
-        # Tiles around the board
-        # To make sure the policy learns that the gray tiles are always one the border,
-        # the reward for connecting to those tiles is bigger.
-        tens[0,:,1] = 0
-        tens[:,0,2] = 0
-        tens[MAX_BSIZE+1,:,0] = 0
-        tens[:,MAX_BSIZE+1,3] = 0
-
-
-        b_size = int(len(sol)**0.5)
-
-        # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
-        #one hot encode the colors
-        for i in range(offset, offset + b_size):
-            for j in range(offset, offset + b_size):
-
-                tens[i,j,:] = 0
-
-                for dir in range(4):
-                    tens[i,j,dir] = torch.tensor(sol[(i - offset) * b_size + (j-offset)][dir])
-        
-        tens.unsqueeze(-1)
-
-
+    if torch.cuda.is_available() and not CUDA_ONLY:
+        # agent = agent.cuda() #FIXME:
+        device = 'cuda'
     else:
+        device = 'cpu' 
 
-        tens = torch.zeros((PADDED_SIZE,PADDED_SIZE,4*N_COLORS), device='cuda' if torch.cuda.is_available() else 'cpu',dtype=UNIT)
+    DURATION = timedelta(seconds=3600)
+    # -------------------- GAME INIT --------------------
+    bsize = eternity_puzzle.board_size
 
-        tens[0,:,N_COLORS + GRAY] = 1
-        tens[:,0,N_COLORS * 2 + GRAY] = 1
-        tens[MAX_BSIZE+1,:,GRAY] = 1
-        tens[:,MAX_BSIZE+1,N_COLORS * 3 + GRAY] = 1
+    cfg = {
+            'n_tiles' : None,
+            'gamma' : None,
+            'clip_eps' : None,
+            'lr' : 1,
+            'epochs' : None,
+            'minibatch_size' : None,
+            'horizon' : None,
+            'state_dim' : None,
+            'n_heads':60,
+            'dim_embed': 15,
+            'hidden_size':32,
+            'entropy_weight':None,
+            'value_weight':None,
+            'gae_lambda':None,
+            'device' : None,
+            'first_corner':None,
+    }
+
+    match bsize:
+        case 4:
+            eval_model_dir = "models/Inference/A"
+        case 7:
+            eval_model_dir = "models/Inference/B"
+        case 8:
+            eval_model_dir = "models/Inference/C"
+        case 9:
+            eval_model_dir = "models/Inference/D"
+        case 10:
+            eval_model_dir = "models/Inference/E"
+
+    init_state, tiles, first_corner,n_tiles = initialize_sol(eternity_puzzle,device)
 
 
-        b_size = int(len(sol)**0.5)
+    cfg['n_encoder_layers'], cfg['n_decoder_layers'], cfg['hidden_size'] = infer_model_size(eval_model_dir)
 
-        # center the playable board as much as possible
-        offset = (MAX_BSIZE - b_size) // 2 + 1
-        #one hot encode the colors
-        for i in range(offset, offset + b_size):
-            for j in range(offset, offset + b_size):
+    cfg['first_corner'] = first_corner
+    cfg['n_tiles'] = n_tiles
+    cfg['state_dim'] = bsize + 2
 
-                tens[i,j,:] = 0
+    load_list = [
+        'actor_dt',
+        'critic_dt',
+        'embed_tiles',
+        'embed_state',
+    ]
 
-                for dir in range(4):
-                    tens[i,j, dir * N_COLORS + sol[(i - offset) * b_size + (j-offset)][dir]] = 1
+    agent = PPOAgent(
+        config=cfg,
+        eval_model_dir=eval_model_dir,
+        tiles=tiles,
+        init_state=init_state,
+        load_list=load_list,
+        device=device
+    ).model
+
+    lds = LimitedDiscrepancy(1e-5,5)
 
 
-    return tens
+    start = datetime.now()
+
+    best_score = -1
+    best_sol = None
+    
+    while start + DURATION > datetime.now():
+
+        mask = (torch.zeros_like(tiles[:,0]) == 0)
+        step = 0
+        lds.reset()
+        state = init_state
+        
+        while step != n_tiles - 2:
+
+            t0 = datetime.now()            
+
+            policy, value = agent(
+                state,
+                torch.tensor(step,device=state.device),
+                mask
+            )
+                    
+            selected_tile_idx = lds.get_action(policy,n_tiles-step)
+            selected_tile = tiles[selected_tile_idx]
+            new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
+
+            mask[selected_tile_idx] = False
+            state = new_state
+            step += 1
+
+            print(datetime.now() - t0)
 
 
-def to_list(sol:torch.Tensor) -> list:
+        episode_score = get_connections(new_state,bsize)
+        lds.step(episode_score)
+        print(episode_score)
+        if episode_score > best_score:
+            best_score = episode_score
+            best_sol = new_state
+            eternity_puzzle.print_solution(to_list(best_sol,bsize),f"adv_{best_score}")
+        
 
-
-    list_sol = []
-    for i in range(1, sol.shape[0] - 1):
-        for j in range(1, sol.shape[0] - 1):
-
-            temp = torch.where(sol[i,j] == 1)[0]
-
-            for dir in range(4):
-                temp[dir] -= dir * N_COLORS
-            
-            list_sol.append(tuple(temp.tolist()))
+    list_sol = to_list(best_sol,bsize)
 
     return list_sol
 
+
+
+def infer_model_size(model_dir,load_list=None):
+
+    corresp_dict = {
+    'actor_dt': {
+        'dir':f'{model_dir}/transformers'
+        },
+    'critic_dt': {
+        'dir':f'{model_dir}/transformers'
+        },
+    'actor_head': {
+        'dir':f'{model_dir}/heads'
+        },
+    'critic_head': {
+        'dir':f'{model_dir}/heads'
+        },
+    'embed_tiles': {
+        'dir':f'{model_dir}/embeds'
+        },
+    'embed_state': {
+        'dir':f'{model_dir}/embeds'
+        },
+    }
+
+    if load_list is None:
+        load_list = corresp_dict.keys()
+
+    num_enc_layers = 0
+    num_dec_layers = 0
+    hidden_size = 0
+
+    for key in load_list:
+
+        state_dict = torch.load(f"{corresp_dict[key]['dir']}/{key}.pt")
+
+
+        for param in state_dict.keys():
+
+            try:
+                ne = int(parse("encoder.layers.{}.{}",param)[0])
+                if ne > num_enc_layers:
+                    num_enc_layers = ne
+            except:
+                pass
+
+            try:
+
+                nd = int(parse("decoder.layers.{}.{}",param)[0])
+
+                if nd > num_dec_layers:
+                    num_dec_layers = nd
+                
+            except:
+                pass
+            
+            if 'linear1' in param:
+                hidden_size = state_dict[param].size()[0]
+
+    return num_enc_layers + 1, num_dec_layers + 1, hidden_size
+
+
+
+
+
+
+
+
+class LimitedDiscrepancy:
+
+    def __init__(self,epsilon, stale_period,) -> None:
+        self.max_descrepancy = 0
+        self.epsilon = epsilon # Every node of the tree becomes available eventually
+        self.budget = 0
+        self.best_score = 0
+        self.counter = 0
+        self.stale_period = stale_period
+
+    def get_action(self,policy:torch.Tensor,remaining_steps):
+
+        # Choose amongst best actions
+        if random.random() < self.budget / (remaining_steps) ** 0.2:
+            best_actions = (policy + self.epsilon).topk(self.budget+1, sorted=True).indices.squeeze(0)
+        else:
+            best_actions = (policy + self.epsilon).topk(self.budget+1, sorted=True).indices.squeeze(0)
+
+        idx = random.randint(0,len(best_actions)-1)
+
+        # Update budget accordingly
+        self.budget -= idx
+        return best_actions[idx]
+    
+
+    def step(self,episode_score):
+
+        if episode_score <= self.best_score:
+            self.counter += 1
+        
+        else:
+            self.best_score = episode_score
+            self.counter = 0
+
+        if self.counter >= self.stale_period * (self.max_descrepancy**1.5 + 1) or self.max_descrepancy == 0:
+            self.max_descrepancy += 1
+
+    
+    def reset(self):
+        self.budget = self.max_descrepancy
+
+
+class TabuList:
+
+    def __init__(self,size,tabu_length) -> None:
+        self.size = size
+        self.tabu = {}
+        self.length = tabu_length
+
+    def push(self,state:torch.Tensor, step:int):
+        key = sha256(state.cpu().numpy()).hexdigest()
+        self.tabu[key] = step + self.length
+    
+    def in_tabu(self,state):
+        key = sha256(state.cpu().numpy()).hexdigest()
+        return key in self.tabu.keys()
+    
+    def update(self,step:int):
+        self.tabu = {k:v for k,v in self.tabu.items() if v > step}
+
+    def get_update(self,batch:torch.Tensor,step:int):
+
+        np_batch = batch.cpu().numpy()
+        for i in range(np_batch.shape[0]):
+
+            key = sha256(np_batch[i]).hexdigest()
+
+            if key not in self.tabu.keys():
+
+                self.push(batch[i],step)
+                return torch.from_numpy(np_batch[i]).to(device=batch.device).to(dtype=batch.dtype),i
+            
+        return None,None
+
+
+    def fast_foward(self):
+        vals = self.tabu.values()
+        m = min(vals)
+        print(m)
+        for k in self.tabu.keys():
+            self.tabu[k] -= m

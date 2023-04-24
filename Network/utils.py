@@ -6,8 +6,8 @@ import sys
 import torch
 from torch import Tensor
 from einops import rearrange, repeat
-from eternity import EternityPuzzle
-from param import *
+from Network.eternity import EternityPuzzle
+from Network.param import *
 
 
 # -------------------- UTILS --------------------
@@ -22,9 +22,8 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def initialize_sol(instance_file:str, device):
+def initialize_sol(pz:EternityPuzzle, device):
 
-    pz = EternityPuzzle(instance_file)
     n_tiles = len(pz.piece_list)
     tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device)
 

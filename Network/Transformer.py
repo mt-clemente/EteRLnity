@@ -12,12 +12,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from param import *
-from Trajectories import EpisodeBuffer
+from Network.param import *
+from Network.Trajectories import EpisodeBuffer
 from torch.utils.data import TensorDataset,DataLoader
 # -------------------- AGENT --------------------
+
 class PPOAgent:
-    def __init__(self,config,tiles,init_state):
+    def __init__(self,config,tiles = None,init_state = None, eval_model_dir = None, device = None,load_list=None):
+
         self.tiles = tiles
 
         self.gamma = config['gamma']
@@ -30,7 +32,10 @@ class PPOAgent:
         self.entropy_weight = config['entropy_weight']
         self.value_weight = config['value_weight']
         self.gae_lambda = config['gae_lambda']
-        self.device = 'cuda' if torch.cuda.is_available() and CUDA_ONLY else 'cpu'
+        if device is None:
+            self.device = 'cuda' if torch.cuda.is_available() and CUDA_ONLY else 'cpu'
+        else:
+            self.device = device
         n_tiles = config['n_tiles']
         hidden_size = config['hidden_size']
         dim_embed = config['dim_embed']
@@ -55,7 +60,6 @@ class PPOAgent:
             device=self.device,
             )
         
-        self.workers = nn.ModuleList([copy.deepcopy(self.model) for i in range(NUM_WORKERS)])
         
 
         self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
@@ -65,6 +69,14 @@ class PPOAgent:
             end_factor=1,
             total_iters=1e5,
         )
+    
+
+        if not eval_model_dir is None:
+            self.load_model(eval_model_dir,load_list)
+            # self.model.eval()
+        
+
+        self.workers = nn.ModuleList([copy.deepcopy(self.model) for i in range(NUM_WORKERS)])
 
         
 
@@ -195,11 +207,11 @@ class PPOAgent:
         torch.save(self.model.critic_head.state_dict(), f'{dir}/heads/critic_{episode}.pt')
 
 
-        torch.save(self.model.embed_tiles.state_dict(), f'{dir}/embeds/action_{episode}.pt')
+        torch.save(self.model.embed_tiles.state_dict(), f'{dir}/embeds/tiles_{episode}.pt')
         torch.save(self.model.embed_state.state_dict(), f'{dir}/embeds/state_{episode}.pt')
 
 
-    def load_model(self,load_dict:dict):
+    def load_model(self,model_dir, load_list = None):
         """
         Loads a model depending on the given loading dictionary:
 
@@ -209,42 +221,45 @@ class PPOAgent:
         * critic_dt : the critic transformer
         * actor_head : the actor head
         * critic_head : the critic head
-        * embed_action : action color embedding
+        * embed_tiles : action color embedding
         * embed_state : state color embedding
+        If no keys are given, the whole model is loaded.
         """
-
-        main_dir = 'models/checkpoint'
 
         corresp_dict : dict[nn.Module] = {
             'actor_dt': {
                 'model':self.model.actor_dt,
-                'dir':f'{main_dir}/transformers'
+                'dir':f'{model_dir}/transformers'
                 },
             'critic_dt': {
                 'model':self.model.critic_dt,
-                'dir':f'{main_dir}/transformers'
+                'dir':f'{model_dir}/transformers'
                 },
             'actor_head': {
                 'model':self.model.actor_head,
-                'dir':f'{main_dir}/heads'
+                'dir':f'{model_dir}/heads'
                 },
             'critic_head': {
                 'model':self.model.critic_head,
-                'dir':f'{main_dir}/heads'
+                'dir':f'{model_dir}/heads'
                 },
             'embed_tiles': {
                 'model':self.model.embed_tiles,
-                'dir':f'{main_dir}/embeds'
+                'dir':f'{model_dir}/embeds'
                 },
             'embed_state': {
                 'model':self.model.embed_state,
-                'dir':f'{main_dir}/embeds'
+                'dir':f'{model_dir}/embeds'
                 },
         }
 
+        if load_list is None:
+            load_list = corresp_dict.keys()
 
-        for key in load_dict.keys:
-            state_dict = torch.load(f"{corresp_dict[key]['dir']/{key}}.pt")
+
+        for key in load_list:
+            print(key)
+            state_dict = torch.load(f"{corresp_dict[key]['dir']}/{key}.pt")
             model = corresp_dict[key]['model']
             model.load_state_dict(state_dict)
 
@@ -351,11 +366,6 @@ class DecisionTransformerAC(nn.Module):
         self.critic_dt.apply(init_weights)
         # Apply the initialization to the sublayers of the transformer layers
 
-        wandb.watch(self.actor_dt,log='all',log_freq=500)
-        wandb.watch(self.actor_head,log='all',log_freq=500)
-        wandb.watch(self.critic_dt,log='all',log_freq=500)
-        wandb.watch(self.critic_head,log='all',log_freq=500)
-            
         self.dim_embed = dim_embed 
         self.embed_tiles = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
         self.embed_state = nn.Embedding(N_COLORS,dim_embed,device=device,dtype=UNIT)
@@ -396,6 +406,8 @@ class DecisionTransformerAC(nn.Module):
 
         if guide:
             tile_mask = self.guide_action(states_,timesteps_+1,tile_mask)
+        elif batch_size == 1:
+            tile_mask = tile_mask.unsqueeze(0)
 
         policy_tokens = self.actor_dt(
             src=src_inputs,
