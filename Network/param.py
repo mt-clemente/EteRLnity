@@ -19,10 +19,12 @@ HIDDEN_SIZE = 512
 N_ENCODER_LAYERS = 4
 N_DECODER_LAYERS = 4
 N_HEADS = 15
-GAE_LAMBDA = 0.85
-ENTROPY_WEIGHT = 0.03
+GAE_LAMBDA = 0.9
+ENTROPY_WEIGHT = 0.008
 VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
+
+POINTER = True
 
 # --------------------  SETTINGS -------------------- 
 
@@ -42,17 +44,17 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 1
-NUM_WORKERS = 3
+NUM_WORKERS = 4
 CHECKPOINT_PERIOD = 100
-MINIBATCH_SIZE = 8
+MINIBATCH_SIZE = 9
 # in number of steps, remember that the first tile is always placed
 # so for a 100 steps game, your max horizon will be 99. Horizon
 # needs to be smaller than an episode.
-HORIZON = 48
+HORIZON = 9
 
 OPT_EPSILON = 1e-4
-LR = 1e-3
-GAMMA = 0.92
+LR = 7e-4
+GAMMA = 0.96
 CLIP_EPS = 0.12
 
 CONFIG = {

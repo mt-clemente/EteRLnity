@@ -1,5 +1,5 @@
 import random
-from Network.Transformer import PPOAgent
+from Network.transformer import PPOAgent
 from Network.utils import get_conflicts, initialize_sol, place_tile, to_list, get_connections
 from eternity_puzzle import EternityPuzzle
 import torch

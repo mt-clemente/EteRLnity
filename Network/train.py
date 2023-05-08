@@ -1,17 +1,18 @@
 import copy
 import torch
 from torch import Tensor
-from Network.Trajectories import *
-from Network.Transformer import DecisionTransformerAC, PPOAgent
+from Network.trajectories import *
+from Network.transformer import DecisionTransformerAC, PPOAgent
 from Network.utils import *
 from Network.param import *
 import wandb
-
+import torch.multiprocessing as mp
 from solver_advanced import infer_model_size
 
 LOG_EVERY = 1
 
 def train_model(hotstart:str = None):
+    mp.set_start_method('spawn')
 
     """
     Your solver for the problem
@@ -78,7 +79,7 @@ def train_model(hotstart:str = None):
 
     agent = PPOAgent(
         config=cfg,
-        eval_model_dir="models/Inference/D",
+        eval_model_dir=None,
         tiles=tiles,
         init_state=init_state,
         load_list=load_list,
@@ -196,10 +197,12 @@ def train_model(hotstart:str = None):
             else:
                 raise OSError(step)
 
-                    # checkpoint the policy net
-            if episode % CHECKPOINT_PERIOD == 0:
 
-                agent.save_models(dir,episode)
+
+            if episode % CHECKPOINT_PERIOD == 0:
+                # FIXME:
+                pass
+                # agent.save_models(dir,episode)
 
     except KeyboardInterrupt:
         pass
@@ -207,6 +210,22 @@ def train_model(hotstart:str = None):
     list_sol = to_list(best_sol,bsize)
     print(pz.verify_solution(list_sol))
     pz.print_solution(list_sol,"run_solution")
+
+
+def worker_fn(worker_id, worker, state, mask, tiles, n_tiles, step, horizon):
+    device = 'cuda' if torch.cuda.is_available else 'cpu'
+    worker = worker.to(device)
+    state = state.to(device)
+    mask = mask.to(device)
+    tiles = tiles.to(device)
+    print("Hello")
+    new_state, new_mask,ep_buf = rollout(worker, state, mask, tiles, n_tiles, step, horizon)
+    print("Hrrsdello")
+    conf = get_conflicts(new_state, bsize=worker.bsize)
+    print("hello",worker_id)
+
+    return worker_id, new_state.clone(), new_mask.clone(), copy.deepcopy(ep_buf.clone()), conf.clone()
+
 
 
 def rollout(worker:DecisionTransformerAC,
@@ -221,10 +240,9 @@ def rollout(worker:DecisionTransformerAC,
     bsize = int(n_tiles**0.5)
     device = state.device
 
+
     horizon_end = False
-
     while not horizon_end:
-
         with torch.no_grad():
             policy, value = worker(
                 state,
