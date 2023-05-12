@@ -1,5 +1,6 @@
 import copy
 from pathlib import Path
+import random
 from einops import einsum, rearrange
 import numpy as np
 import torch
@@ -14,8 +15,9 @@ from Network.trajectories import EpisodeBuffer
 from torch.utils.data import DataLoader
 # -------------------- AGENT --------------------
 
-class PPOAgent:
+class PPOAgent(nn.Module):
     def __init__(self,config,tiles = None,init_state = None, eval_model_dir = None, device = None,load_list=None):
+        super().__init__()
 
         self.tiles = tiles
 
@@ -55,11 +57,12 @@ class PPOAgent:
             init_state=init_state,
             tiles = tiles,
             device=self.device,
-            )
+        )
         
         
 
-        self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr,weight_decay=1e-4,eps=OPT_EPSILON)
+        self.optimizer = torch.optim.SGD(self.model.parameters(), momentum=0.6, dampening=0, lr=self.lr,weight_decay=0,nesterov=True)
+        # self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,weight_decay=0,eps=OPT_EPSILON)
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=self.optimizer,
             start_factor=0.01,
@@ -116,7 +119,7 @@ class PPOAgent:
                 )
 
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
-                batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
+                # batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
 
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
@@ -157,7 +160,7 @@ class PPOAgent:
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(),1.5)
+                # torch.nn.utils.clip_grad_norm_(self.model.parameters(),0.5)
                 self.optimizer.step()
                 self.scheduler.step()
                 g=0
@@ -167,6 +170,8 @@ class PPOAgent:
                     # print(f"{name:>28} - {torch.norm(param.grad)}")
                     # print(f"{name:>28}")
                     g+=torch.norm(param.grad)
+
+        
 
         print(datetime.now()-t0)
         wandb.log({
@@ -307,7 +312,7 @@ class DecisionTransformerAC(nn.Module):
 
 
         self.actor_dt =  Transformer(
-                d_model=dim_embed,
+                d_model=dim_embed*4,
                 num_encoder_layers=n_encoder_layers,
                 num_decoder_layers=n_decoder_layers,
                 nhead=n_heads,
@@ -321,7 +326,7 @@ class DecisionTransformerAC(nn.Module):
             )
         
         self.critic_dt =  nn.Transformer(
-                d_model=dim_embed,
+                d_model=dim_embed*4,
                 num_encoder_layers=n_encoder_layers,
                 num_decoder_layers=n_decoder_layers,
                 dim_feedforward=self.hidden_size,
@@ -366,13 +371,12 @@ class DecisionTransformerAC(nn.Module):
         self.actor_dt.apply(init_weights)
         self.critic_dt.apply(init_weights)
         # Apply the initialization to the sublayers of the transformer layers
-
         self.dim_embed = dim_embed 
         self.embed_tiles = torch.nn.Embedding(N_COLORS + 2, dim_embed,device=device,dtype=UNIT) # NCOLLORS, BOS, PAD
         self.embed_state = nn.Embedding(N_COLORS,dim_embed,device=device,dtype=UNIT)
-        self.positional_encoding = PE3D(dim_embed)
-        self.embed_state_ln = nn.LayerNorm(dim_embed,eps=1e-5,device=device,dtype=UNIT)
-        self.embed_tile_ln = nn.LayerNorm(dim_embed,eps=1e-5,device=device,dtype=UNIT)
+        self.positional_encoding = PositionalEncoding2D(dim_embed*4)
+        self.embed_state_ln = nn.LayerNorm(dim_embed*4,eps=1e-5,device=device,dtype=UNIT)
+        self.embed_tile_ln = nn.LayerNorm(dim_embed*4,eps=1e-5,device=device,dtype=UNIT)
 
 
 
@@ -393,45 +397,57 @@ class DecisionTransformerAC(nn.Module):
             timesteps_ = timesteps.unsqueeze(0)
 
         # embed each modality with a different head
-        tiles_embeddings = self.embed_tiles(self.tiles.int()).reshape(self.act_dim * 4,self.dim_embed)
+        tiles_embeddings = self.embed_tiles(self.tiles.int()).reshape(self.act_dim,self.dim_embed*4)
         tiles_embeddings = tiles_embeddings.expand(batch_size,-1,-1)
 
         state_embeddings = self.embed_state(states_[:,1:-1,1:-1,:].int())
+        state_embeddings = state_embeddings.view(-1,self.bsize,self.bsize,self.dim_embed*4)
         state_embeddings += self.positional_encoding(state_embeddings)
-        state_embeddings = state_embeddings.view(-1,self.bsize**2 * 4,self.dim_embed)
+        state_embeddings = state_embeddings.view(-1,self.bsize**2,self.dim_embed*4)
 
         src_inputs = self.embed_tile_ln(tiles_embeddings)
         tgt_inputs = self.embed_state_ln(state_embeddings)
 
-        tgt_key_padding_mask_ = torch.arange(self.act_dim+1,device=timesteps_.device).repeat(batch_size,1) > timesteps_
-        tgt_key_padding_mask = torch.repeat_interleave(tgt_key_padding_mask_,4,dim=-1)
+        tgt_key_padding_mask = torch.arange(self.act_dim+1,device=timesteps_.device).repeat(batch_size,1) > timesteps_
+        # tgt_key_padding_mask = torch.repeat_interleave(tgt_key_padding_mask_,4,dim=-1)
 
-        if guide:
+
+        #TODO: Cleanup mask usage
+        if guide and random.random() < GUIDE_PROB:# and random.random < GUIDE_PROB:
             tile_mask_ = self.guide_action(states_,timesteps_+1,tile_mask)
-            tile_mask = torch.repeat_interleave(tile_mask_,4,dim=-1)
-        elif batch_size == 1:
-            tile_mask_ = tile_mask.unsqueeze(0)
-            tile_mask = torch.repeat_interleave(tile_mask_,4,dim=-1)
+            # tile_mask = torch.repeat_interleave(tile_mask_,4,dim=-1)
+        else:
+            tile_mask_ = tile_mask
+            if batch_size == 1:
+                tile_mask_ = tile_mask.unsqueeze(0)
+                # tile_mask = torch.repeat_interleave(tile_mask_,4,dim=-1)
+            else:
+                tile_mask_ = tile_mask
+                # tile_mask = torch.repeat_interleave(tile_mask_,4,dim=-1)
+
+        tile_mask = tile_mask_ #FIXME:
+        causal_mask = torch.triu(torch.ones(tgt_inputs.size()[1], tgt_inputs.size()[1],device=tgt_inputs.device), diagonal=1)
+        # Convert the mask to a boolean tensor with 'True' values below the diagonal and 'False' values on and above the diagonal
+        causal_mask = causal_mask.bool()
 
         if POINTER:
             tgt_tokens, mem_tokens = self.actor_dt(
                 src=src_inputs,
                 tgt=tgt_inputs,
-                src_key_padding_mask=tile_mask,
+                tgt_mask=causal_mask,
                 tgt_key_padding_mask=tgt_key_padding_mask
             )
-            tgt_tokens = tgt_tokens.reshape(batch_size,self.bsize**2,4*self.dim_embed)
+            tgt_tokens = tgt_tokens.reshape(batch_size,self.bsize**2,self.dim_embed*4)
             tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4)
-            mem_tokens = mem_tokens.reshape(batch_size,self.act_dim,4*self.dim_embed)
+            mem_tokens = mem_tokens.reshape(batch_size,self.act_dim,self.dim_embed*4)
             policy_pred = self.policy_attn_head(mem_tokens,tgt_tokens,torch.logical_not(tile_mask_))
         
         else:
             policy_tokens = self.actor_dt(
                 src=src_inputs,
                 tgt=tgt_inputs,
-                src_key_padding_mask=tile_mask,
                 tgt_key_padding_mask=tgt_key_padding_mask
-            ).reshape(batch_size,self.bsize**2,4*self.dim_embed)
+            ).reshape(batch_size,self.bsize**2,self.dim_embed*4)
 
             policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
             policy_pred = self.policy_head(policy_logits,tile_mask_)
@@ -440,8 +456,7 @@ class DecisionTransformerAC(nn.Module):
             src=src_inputs,
             tgt=tgt_inputs,
             tgt_key_padding_mask=tgt_key_padding_mask
-        ).reshape(batch_size,self.bsize**2,4*self.dim_embed)
-
+        ).reshape(batch_size,self.bsize**2,self.dim_embed*4)
 
         value_pred = self.critic_head(value_tokens[torch.arange(batch_size,device=value_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed*4))
 
@@ -495,6 +510,8 @@ class DecisionTransformerAC(nn.Module):
 
 class Transformer(nn.Module):
 
+    #TODO: Cache encoder output
+
     def __init__(self, d_model,num_encoder_layers,num_decoder_layers,dim_feedforward,nhead,activation,device,batch_first,norm_first,return_mem=True,dropout=0) -> None:
         super().__init__()
 
@@ -514,25 +531,28 @@ class Transformer(nn.Module):
         self.return_mem = return_mem
 
 
-    def forward(self,src,tgt,src_key_padding_mask,tgt_key_padding_mask):
+    def forward(self,src,tgt,tgt_mask,src_key_padding_mask=None,tgt_key_padding_mask=None):
+
 
         memory = self.transformer.encoder(src,src_key_padding_mask=src_key_padding_mask)
-        output = self.transformer.decoder(tgt,memory,memory_key_padding_mask=src_key_padding_mask,tgt_key_padding_mask=tgt_key_padding_mask)
+        output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask.half()*(-1e6), memory_key_padding_mask=src_key_padding_mask,tgt_key_padding_mask=tgt_key_padding_mask.half()*-1e6)
 
         if self.return_mem:
             return output, memory
         
         return output
-
+    
 class Pointer(nn.Module):
 
     def __init__(self, d_model, device, unit):
         super().__init__()
         self.d_model = d_model
 
-        self.Wq = nn.Linear(d_model,d_model, device=device, dtype=unit)
-        self.Wk = nn.Linear(d_model,d_model, device=device, dtype=unit)
-        self.v = nn.Linear(d_model, 1, device=device, dtype=unit)
+        self.Wq = nn.Linear(d_model,d_model, device=device, dtype=unit,bias=False)
+        self.Wk = nn.Linear(d_model,d_model, device=device, dtype=unit,bias=False)
+        self.v = nn.Linear(d_model, 1, device=device, dtype=unit,bias=False)
+
+        torch.nn.init.normal_(self.v.weight,0,0.01)
 
         nn.MultiheadAttention
     def forward(self, memory:torch.Tensor, target:torch.Tensor, memory_mask:torch.BoolTensor):
@@ -634,9 +654,56 @@ class PE3D(nn.Module):
         self.cached_penc = emb[None, :, :, :, :orig_ch].repeat(batch_size, 1, 1, 1, 1)
         return self.cached_penc
     
-    def get_emb(self,sin_inp):
+def get_emb(sin_inp):
+    """
+    Gets a base embedding for one dimension with sin and cos intertwined
+    """
+    emb = torch.stack((sin_inp.sin(), sin_inp.cos()), dim=-1)
+    return torch.flatten(emb, -2, -1)
+    
+
+
+
+
+
+
+class PositionalEncoding2D(nn.Module):
+    def __init__(self, channels):
         """
-        Gets a base embedding for one dimension with sin and cos intertwined
+        :param channels: The last dimension of the tensor you want to apply pos emb to.
         """
-        emb = torch.stack((sin_inp.sin(), sin_inp.cos()), dim=-1)
-        return torch.flatten(emb, -2, -1)
+        super(PositionalEncoding2D, self).__init__()
+        self.org_channels = channels
+        channels = int(np.ceil(channels / 4) * 2)
+        self.channels = channels
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
+        self.register_buffer("inv_freq", inv_freq)
+        self.cached_penc = None
+
+    def forward(self, tensor):
+        """
+        :param tensor: A 4d tensor of size (batch_size, x, y, ch)
+        :return: Positional Encoding Matrix of size (batch_size, x, y, ch)
+        """
+        if len(tensor.shape) != 4:
+            raise RuntimeError("The input tensor has to be 4d!")
+
+        if self.cached_penc is not None and self.cached_penc.shape == tensor.shape:
+            return self.cached_penc
+
+        self.cached_penc = None
+        batch_size, x, y, orig_ch = tensor.shape
+        pos_x = torch.arange(x, device=tensor.device).type(self.inv_freq.type())
+        pos_y = torch.arange(y, device=tensor.device).type(self.inv_freq.type())
+        sin_inp_x = torch.einsum("i,j->ij", pos_x, self.inv_freq)
+        sin_inp_y = torch.einsum("i,j->ij", pos_y, self.inv_freq)
+        emb_x = get_emb(sin_inp_x).unsqueeze(1)
+        emb_y = get_emb(sin_inp_y)
+        emb = torch.zeros((x, y, self.channels * 2), device=tensor.device).type(
+            tensor.type()
+        )
+        emb[:, :, : self.channels] = emb_x
+        emb[:, :, self.channels : 2 * self.channels] = emb_y
+
+        self.cached_penc = emb[None, :, :, :orig_ch].repeat(tensor.shape[0], 1, 1, 1)
+        return self.cached_penc

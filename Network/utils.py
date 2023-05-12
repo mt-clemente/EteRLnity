@@ -32,7 +32,7 @@ def initialize_sol(pz:EternityPuzzle, device):
     first_corner = tiles[first_corner_idx]
 
     state = torch.zeros((pz.board_size+2,pz.board_size+2,4*COLOR_ENCODING_SIZE),device=device)
-    state, _, _ = place_tile(state,first_corner,0)
+    state, _, _, _ = place_tile(state,first_corner,0)
 
     tiles = tiles[torch.arange(tiles.size()[0],device=tiles.device) != first_corner_idx]
 
@@ -238,17 +238,19 @@ def place_tile(state:Tensor,tile:Tensor,ep_step:int,step_offset:int=0):
     bsize = state.size()[0] - 2
     best_conflict = -10
     best_connect = -1
+    best_reward = None
     for _ in range(4):
         tile = tile.roll(COLOR_ENCODING_SIZE,-1)
         state[step // bsize + 1, step % bsize + 1,:] = tile
-        conflicts, connect = filling_connections(state,bsize,step)
+        conflicts, connect, reward = filling_connections(state,bsize,step)
 
         if connect > best_connect:
             best_state=state.clone()
             best_connect = connect
             best_conflict = conflicts
+            best_reward = reward
 
-    return best_state, -best_conflict, best_connect
+    return best_state, -best_conflict, best_reward, best_connect
 
 def streak(streak_length:int, n_tiles):
     return (2 - exp(-streak_length * 3/(0.8 * n_tiles)))
@@ -309,7 +311,7 @@ def filling_connections(state:Tensor, bsize:int, step):
             reward += 2
             connections += 1
     
-    return sides - connections, connections
+    return sides - connections, connections, reward
 
 
 

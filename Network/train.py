@@ -98,6 +98,7 @@ def train_model(hotstart:str = None):
     dir = f'models/checkpoint/{datetime.now().strftime("%d%M_%h_%m")}'
     episode = 0
     step = 0
+    ep_rew = []
     best_conf = 1000
     best_sol = None
     states = init_state.repeat(NUM_WORKERS,1,1,1)
@@ -147,10 +148,18 @@ def train_model(hotstart:str = None):
             timestep_buf = torch.hstack([worker.ep_buf['timestep_buf'] for worker in agent.workers]).to(training_device)
 
             wandb.log({
-                'Mean batch reward' : rew_buf.mean(),
                 'Advantage repartition': adv_buf,
                 'Return to go repartition': rtg_buf,
             })
+
+            ep_rew.append(rew_buf.mean())
+
+            if step +  HORIZON >= n_tiles or HORIZON > n_tiles / 2:
+                mean_rew = sum(ep_rew) / len(ep_rew)
+                wandb.log({
+                    'Mean batch reward' : mean_rew,
+                })
+
 
 
 
@@ -171,7 +180,7 @@ def train_model(hotstart:str = None):
             #     drop_last = False
 
 
-            loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=True)
+            loader = DataLoader(dataset, batch_size=MINIBATCH_SIZE, shuffle=True, drop_last=False)
             agent.update(
                 loader
             )
@@ -182,7 +191,7 @@ def train_model(hotstart:str = None):
                     worker.ep_buf.reset()
 
                 print(f"END EPISODE {episode} - {avg_conf}")
-
+                ep_rew = []
                 states = init_state.repeat(NUM_WORKERS,1,1,1)
                 masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
                 wandb.log({'Conflicts':avg_conf})
@@ -244,6 +253,7 @@ def rollout(worker:DecisionTransformerAC,
     horizon_end = False
     while not horizon_end:
         with torch.no_grad():
+
             policy, value = worker(
                 state,
                 torch.tensor(step,device=device),
@@ -252,11 +262,12 @@ def rollout(worker:DecisionTransformerAC,
             
         selected_tile_idx = worker.get_action(policy)
         selected_tile = tiles[selected_tile_idx]
-        new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
+        new_state, conf, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
 
         # if step == n_tiles - 2:
         #      reward = get_connections(new_state,bsize,step) * 0.5
-            
+        if conf != 0:
+            reward = conf
 
         worker.ep_buf.push(
             state=state,

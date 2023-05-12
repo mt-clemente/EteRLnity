@@ -14,15 +14,17 @@ N_COLORS = 23
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-DIM_EMBED= 15
+DIM_EMBED= 20
 HIDDEN_SIZE = 512
 N_ENCODER_LAYERS = 4
 N_DECODER_LAYERS = 4
-N_HEADS = 15
+N_HEADS = 40
 GAE_LAMBDA = 0.9
-ENTROPY_WEIGHT = 0.008
+ENTROPY_WEIGHT = 0.03
 VALUE_WEIGHT = 0.5
 POLICY_WEIGHT = 1
+
+GUIDE_PROB = 0.3
 
 POINTER = True
 
@@ -44,18 +46,18 @@ else:
     raise ValueError(f"Encoding {ENCODING} not supported")
   
 EPOCHS = 1
-NUM_WORKERS = 4
+NUM_WORKERS = 8
 CHECKPOINT_PERIOD = 100
 MINIBATCH_SIZE = 9
 # in number of steps, remember that the first tile is always placed
 # so for a 100 steps game, your max horizon will be 99. Horizon
 # needs to be smaller than an episode.
-HORIZON = 9
+HORIZON = 99
 
 OPT_EPSILON = 1e-4
 LR = 7e-4
-GAMMA = 0.96
-CLIP_EPS = 0.12
+GAMMA = 0.94
+CLIP_EPS = 0.16
 
 CONFIG = {
     'unit':UNIT,
@@ -72,5 +74,7 @@ CONFIG = {
     'ENTROPY_WEIGHT':ENTROPY_WEIGHT,
     'VALUE_WEIGHT':VALUE_WEIGHT,
     'POLICY_WEIGHT':POLICY_WEIGHT,
+    'Pointer':POINTER,
+    'Clip epsilon':CLIP_EPS
 
 }

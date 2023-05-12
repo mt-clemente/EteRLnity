@@ -90,8 +90,6 @@ def train_model(hotstart:str = None):
     agent = PPOAgent(cfg,tiles,init_state)
     agent.model.train()
 
-
-
     # -------------------- TRAINING LOOP --------------------
 
     torch.cuda.empty_cache()
@@ -104,12 +102,11 @@ def train_model(hotstart:str = None):
     masks = (torch.zeros_like(tiles[:,0]) == 0).repeat(NUM_WORKERS,1)
 
     print("start")
-
+    shared_agent = agent.share_memory()
 
     try:
         while 1:
 
-            print(tiles)
             pool = mp.Pool(NUM_WORKERS)
 
             avg_conf = 0
@@ -118,7 +115,7 @@ def train_model(hotstart:str = None):
                 args.append(
                         [
                             w,
-                            copy.deepcopy(agent.workers[w]).to('cpu'),
+                            shared_agent,
                             states[w].clone().to('cpu'),
                             masks[w].clone().to('cpu'),
                             tiles.clone().to('cpu'),
@@ -131,7 +128,8 @@ def train_model(hotstart:str = None):
             print("Async launch")
             for w in range(NUM_WORKERS):
                 print(w)
-                async_result  = pool.apply_async(worker_fn, args=args[w])
+                
+                async_result  = pool.(worker_fn, args=args[w])
                 async_results.append(async_result)
             print("start")
             pool.close()
@@ -251,9 +249,10 @@ def train_model(hotstart:str = None):
     pz.print_solution(list_sol,"run_solution")
 
 
-def worker_fn(worker_id, worker, state, mask, tiles, n_tiles, step, horizon):
+def worker_fn(worker_id, shared_agent:PPOAgent, state, mask, tiles, n_tiles, step, horizon):
     device = 'cuda' if torch.cuda.is_available else 'cpu'
-    worker = worker.to(device)
+    shared_agent.tiles = tiles
+    worker =  shared_agent.workers[worker_id].to(device)
     state = state.to(device)
     mask = mask.to(device)
     tiles = tiles.to(device)
@@ -282,21 +281,17 @@ def rollout(worker:DecisionTransformerAC,
 
     horizon_end = False
     while not horizon_end:
+
         with torch.no_grad():
-            print(mask)
-            print(state)
-            print(tiles)
             policy, value = worker(
                 state,
                 torch.tensor(step,device=device),
                 mask,
             )
-        print(policy)
+
         selected_tile_idx = worker.get_action(policy)
         selected_tile = tiles[selected_tile_idx]
         new_state, reward, _ = place_tile(state,selected_tile,step,step_offset=1)
-        print(selected_tile)
-        raise OSError
 
         # if step == n_tiles - 2:
         #      reward = get_connections(new_state,bsize,step) * 0.5
@@ -321,8 +316,6 @@ def rollout(worker:DecisionTransformerAC,
         mask[selected_tile_idx] = False
         state = new_state
         step += 1
-        print(state)
-        print(mask)
 
     return new_state,mask,worker.ep_buf
 
