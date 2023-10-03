@@ -8,25 +8,12 @@
 <details>
   <summary>Table of Contents</summary>
   <ol>
-    <li>
-      <a href="#about-the-project">About The Project</a>
-      <ul>
-        <li><a href="#built-with">Built With</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
-    </li>
+    <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#the-agent">The agent</a></li>
     <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#some-results">Results</a></li>
+    <li><a href="#future-improvements">Future Improvements</a></li>
     <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
 
@@ -56,10 +43,10 @@ learning, to see how well a deep neural network could perform with this task.
 To try and learn how this problem *behaves* without knowing the full 
 solution, we use a reinforcement learning agent with **PPO**. The
 particularity here, is that we do not use a CNN which would seem like
-the most obvious way to fo, because of the importance of spatial
+the most obvious way to go, because of the importance of spatial
 structure in the task. Instead, we make two important choices:
  * The agent will be trained with the aiming of **solving** the problem,
- not just getting a better solution. This entails that when placing a piece, there is either one optimal orientation for a given (state,placing position). The agent then only has to learn a the order of the pieces and not their orientation. This greatly reduces the state space.
+ not just getting a better solution. This entails that when placing a piece, there is either one optimal orientation for a given (state, placing position). The agent then only has to learn a the order of the pieces and not their orientation. This greatly reduces the state space.
  * The task will be treated as a sequence processing task : the learning
  episode will start from an empty board and always fill it in the same order.
 
@@ -114,16 +101,16 @@ The project is included with a makefile for simplicity of use:
   ```
  
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
 ## Some results
 As stated before, the computing power available to train the model was very limited
-but the results are still encouraing: in a few thousands of episodes, the agent shows
+but the results are still encouraging: in a few thousands of episodes, the agent shows
 clear signs of learning. This is using a basic transformer, with only up to 4 encoding
 or decoding layers. 
 
 
-![Alt text](results_rlco.png)
+<p align="center">
+  <img src=results_rlco.png />
+</p>
 
 This is not performing that well compared to advanced metaheuristic algorithms, but it
 seems more modular and adaptable. Once the metaheuristic algorithm is launched, it is
@@ -132,11 +119,11 @@ heuristic algorithms, still has many options for improvement.
 
 
 <!-- ROADMAP -->
-## Improvments, roadmap.
+## Future improvements
 
 - More extensive hyperparameter tuning
 - Test the model on bigger GPUs, as VRAM was the limiting factor in model scaling.
-- Test different type of policy heads.
+- Test different types of policy heads.
 - New, more stable transformer models (precisely TrXL,GTrXL) could offer good improvements
   on performance and training stability.
 - Try new problem paradigms, for example but not only instead of choosing the piece given
