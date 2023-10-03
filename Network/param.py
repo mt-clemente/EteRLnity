@@ -1,12 +1,9 @@
 from math import log2,ceil
 import torch
 
-torch.manual_seed(0)
+# For reproducible results; storch.manual_seed(0)
 
 # -------------------- PUZZLE SETTINGS -------------------- 
-
-MAX_BSIZE = 16
-PADDED_SIZE = MAX_BSIZE + 2
 
 GRAY = 0
 N_COLORS = 23
@@ -32,8 +29,13 @@ POINTER = True
 
 DEBUG = False
 
+# Force CPU for training
 CPU_TRAINING = False
 UNIT = torch.half
+
+# As for now, only ordinal color encoding is is functional, because we use learned
+# embeddings, which performs better and offers better tuning than binary or one hot
+# encoding
 ENCODING = 'ordinal'
 
 if ENCODING == 'binary':
@@ -49,10 +51,11 @@ EPOCHS = 1
 NUM_WORKERS = 8
 CHECKPOINT_PERIOD = 100
 MINIBATCH_SIZE = 9
-# in number of steps, remember that the first tile is always placed
-# so for a 100 steps game, your max horizon will be 99. Horizon
+
+# The first tile is always automatically placed
+# So for a 100 steps game, your max horizon will be 99. Horizon
 # needs to be smaller than an episode.
-HORIZON = 99
+HORIZON = 48
 
 OPT_EPSILON = 1e-4
 LR = 7e-4
