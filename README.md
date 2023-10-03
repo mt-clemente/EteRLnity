@@ -13,7 +13,6 @@
     <li><a href="#usage">Usage</a></li>
     <li><a href="#some-results">Results</a></li>
     <li><a href="#future-improvements">Future Improvements</a></li>
-    <li><a href="#license">License</a></li>
   </ol>
 </details>
 
